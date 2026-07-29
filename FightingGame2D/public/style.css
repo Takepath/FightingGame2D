@@ -1,0 +1,124 @@
+body {
+    margin: 0;
+    padding: 0;
+    color: rgba(255, 255, 255, 0.87);
+    background-color: #080d1c;
+    font-family: Arial, sans-serif;
+    overscroll-behavior: none;
+}
+
+#app {
+    width: 100%;
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+#pixi-container,
+#pixi-container canvas {
+    display: block;
+}
+
+#network-open,
+#network-panel button,
+#network-panel input {
+    font: inherit;
+}
+
+#network-open {
+    position: fixed;
+    z-index: 4;
+    top: 14px;
+    right: 14px;
+    border: 1px solid #6dcbf1;
+    border-radius: 6px;
+    padding: 8px 12px;
+    color: #eaf8ff;
+    background: #102142e6;
+    font-weight: 800;
+    letter-spacing: .08em;
+    cursor: pointer;
+}
+
+#network-panel {
+    position: fixed;
+    z-index: 5;
+    top: 50%;
+    left: 50%;
+    width: min(420px, calc(100vw - 32px));
+    box-sizing: border-box;
+    transform: translate(-50%, -50%);
+    border: 1px solid #6dcbf1;
+    border-radius: 12px;
+    padding: 20px;
+    color: #edf7ff;
+    background: #09152bf5;
+    box-shadow: 0 12px 55px #000b;
+}
+
+#network-panel.is-hidden {
+    display: none;
+}
+
+#network-panel h1 {
+    margin: 0 0 8px;
+    color: #6dcbf1;
+    font-size: 20px;
+    letter-spacing: .1em;
+}
+
+#network-panel p {
+    margin: 8px 0;
+    color: #b7d0e9;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+#network-close {
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    border: 0;
+    color: #b7d0e9;
+    background: transparent;
+    font-size: 23px;
+    cursor: pointer;
+}
+
+#room-phrase {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid #517ca8;
+    border-radius: 6px;
+    padding: 10px;
+    color: #f4fbff;
+    background: #071020;
+}
+
+.room-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.room-actions button,
+.room-offline {
+    border: 1px solid #477ba7;
+    border-radius: 6px;
+    padding: 9px;
+    color: #effaff;
+    background: #16375b;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.room-offline {
+    width: 100%;
+    margin-top: 4px;
+    border-color: #596c85;
+    background: #1b293b;
+    font-size: 12px;
+}

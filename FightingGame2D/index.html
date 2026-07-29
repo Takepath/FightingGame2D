@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="/style.css">
+    <title>Frame Fighters - 2D Fighting Game</title>
+</head>
+
+<body>
+    <div id="app">
+        <div id="pixi-container"></div>
+    </div>
+    <button id="network-open" type="button">ONLINE ROOM</button>
+    <section id="network-panel" aria-label="オンライン対戦ルーム">
+        <button id="network-close" type="button" aria-label="閉じる">×</button>
+        <h1>ONLINE ROOM</h1>
+        <p>同じ合言葉を入力した2人で対戦します。</p>
+        <input id="room-phrase" type="text" minlength="4" maxlength="32" placeholder="合言葉（4〜32文字）" autocomplete="off" />
+        <div class="room-actions">
+            <button id="room-create" type="button">部屋を作成</button>
+            <button id="room-join" type="button">部屋に参加</button>
+        </div>
+        <p id="room-status">ローカル対戦中。オンライン対戦を始めるには合言葉を入力してください。</p>
+        <button id="room-offline" class="room-offline" type="button">切断してローカル対戦へ</button>
+    </section>
+    <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

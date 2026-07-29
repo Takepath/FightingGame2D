@@ -1,0 +1,3 @@
+id,name,render_type,animation_asset,primary_color,accent_color,max_health,walk_speed,jump_velocity
+blender_hero,BLENDER HERO,blender,data/animations/blender_hero.json,#4FD8FF,#FFC857,100,430,1900
+stick_rival,STICK RIVAL,stick,,#FF5D8F,#B985FF,100,455,1960
