@@ -13,44 +13,98 @@ import {
 } from "./simulation";
 import type { GameData } from "./types";
 
+// 60FPS固定シミュレーション用の更新間隔
 const FIXED_STEP_MS = 1000 / 60;
+
+// 1フレーム描画中に実行できるシミュレーション更新の最大回数
 const MAX_STEPS_PER_RENDER = 5;
 
-/** The actual match. Rendering is decoupled from its 60 Hz deterministic simulation. */
+/**
+ * 対戦画面クラス
+ * 描画(Render)とゲームシミュレーション(60Hz)を分離して管理する
+ */
 export class MatchScreen extends Container {
+  /** 読み込むアセットバンドル */
   public static assetBundles: string[] = [];
+
+  /** ゲーム全体の設定データ */
   private static gameData: GameData | null = null;
+
+  /** ゲーム画面全体 */
   private readonly world = new Container();
+
+  /** ステージ背景 */
   private readonly stageArt = new Graphics();
+
+  /** 飛び道具描画 */
   private readonly projectileArt = new Graphics();
+
+  /** HUD(体力バーなど) */
   private readonly hudArt = new Graphics();
+
+  /** 入力管理 */
   private readonly input = new InputManager();
+
+  /** フレーム同期管理(オンライン同期用) */
   private readonly synchronizer = new FrameSynchronizer();
+
+  /** ゲームシミュレーション */
   private readonly simulation: MatchSimulation;
+
+  /** プレイヤー表示 */
   private readonly fighterViews: [FighterView, FighterView];
+
+  /** タイトル表示 */
   private readonly title: Text;
+
+  /** 情報表示 */
   private readonly info: Text;
+
+  /** ラウンド表示 */
   private readonly roundText: Text;
+
+  /** KO表示 */
   private readonly koText: Text;
+
+  /** 経過時間蓄積 */
   private accumulatorMs = 0;
+
+  /** 一時停止フラグ */
   private paused = false;
+
+  /** オンライン同期 */
   private online: OnlineFrameBridge | null = null;
+
+  /** 自分のプレイヤー番号 */
   private onlinePlayer: 0 | 1 | null = null;
 
+  /**
+   * ゲームデータを設定
+   */
   public static configure(data: GameData): void {
     MatchScreen.gameData = data;
   }
 
+  /**
+   * コンストラクタ
+   * ゲーム画面の初期化
+   */
   public constructor() {
     super();
+
     const data = MatchScreen.gameData;
     if (!data) throw new Error("ゲームデータが初期化されていません");
 
+    // 使用キャラクター決定
     const selectedCharacters = [
       data.characters[0],
       data.characters[1],
     ] as const;
+
+    // シミュレーション生成
     this.simulation = new MatchSimulation(selectedCharacters, data.moves);
+
+    // プレイヤー表示生成
     this.fighterViews = [
       new FighterView(
         this.simulation.fighters[0],
@@ -61,11 +115,14 @@ export class MatchScreen extends Container {
         data.blenderAnimations[selectedCharacters[1].id],
       ),
     ];
+
+    // HUD文字生成
     this.title = this.createText("FRAME FIGHTERS", 23, "#ecf5ff");
     this.info = this.createText("", 14, "#a9c7ed");
     this.roundText = this.createText("ROUND 1", 24, "#ffffff");
     this.koText = this.createText("", 46, "#fff1a3");
 
+    // 描画順に追加
     this.world.addChild(
       this.stageArt,
       this.projectileArt,
@@ -73,91 +130,140 @@ export class MatchScreen extends Container {
       this.fighterViews[1],
       this.hudArt,
     );
-    this.world.addChild(this.title, this.info, this.roundText, this.koText);
+
+    this.world.addChild(
+      this.title,
+      this.info,
+      this.roundText,
+      this.koText,
+    );
+
     this.addChild(this.world);
+
+    // 初回描画
     this.drawStage();
     this.drawHud();
     this.refreshViews();
   }
 
+  /**
+   * オンライン対戦開始
+   */
   public startOnline(client: RoomClient): void {
     if (client.player === null) return;
+
     this.online = new OnlineFrameBridge(client);
     this.onlinePlayer = client.player;
+
     this.synchronizer.reset();
     this.simulation.resetMatch();
     this.accumulatorMs = 0;
   }
 
+  /**
+   * オンライン対戦終了
+   */
   public stopOnline(): void {
     if (!this.online) return;
+
     this.online = null;
     this.onlinePlayer = null;
+
     this.synchronizer.reset();
     this.simulation.resetMatch();
     this.accumulatorMs = 0;
   }
 
+  /**
+   * 毎フレーム更新
+   * 描画フレームとは独立して60FPSシミュレーションを実行
+   */
   public update(time: Ticker): void {
     if (this.paused) return;
+
     this.accumulatorMs += Math.min(time.deltaMS, 250);
+
     let executedSteps = 0;
 
     while (
       this.accumulatorMs >= FIXED_STEP_MS &&
       executedSteps < MAX_STEPS_PER_RENDER
     ) {
+
+      // オンラインなら同期入力
+      // オフラインならローカル入力
       const inputs = this.online
         ? this.online.inputsForFrame(
             this.synchronizer.frame,
             this.input.sample(0),
           )
         : ([this.input.sample(0), this.input.sample(1)] as const);
+
       if (!inputs) {
-        // Strict lockstep: wait for the opponent rather than inventing a remote input.
+        // 相手入力待ち
         this.accumulatorMs = Math.min(this.accumulatorMs, FIXED_STEP_MS);
         break;
       }
+
+      // シミュレーション1フレーム進める
       this.synchronizer.advance(this.simulation, inputs);
+
       this.accumulatorMs -= FIXED_STEP_MS;
-      executedSteps += 1;
+      executedSteps++;
     }
-    // Do not simulate a large, non-deterministic catch-up after a background tab resumes.
-    if (executedSteps === MAX_STEPS_PER_RENDER) this.accumulatorMs = 0;
+
+    // 長時間停止後の大量更新を防止
+    if (executedSteps === MAX_STEPS_PER_RENDER)
+      this.accumulatorMs = 0;
+
+    // 描画更新
     this.refreshViews();
   }
 
+  /**
+   * ウィンドウサイズ変更
+   */
   public resize(width: number, height: number): void {
     const scale = Math.min(width / STAGE_WIDTH, height / STAGE_HEIGHT);
+
     this.world.scale.set(scale);
+
     this.world.position.set(
       (width - STAGE_WIDTH * scale) / 2,
       (height - STAGE_HEIGHT * scale) / 2,
     );
   }
 
+  /** 一時停止 */
   public async pause(): Promise<void> {
     this.paused = true;
     this.accumulatorMs = 0;
   }
 
+  /** 再開 */
   public async resume(): Promise<void> {
     this.paused = false;
   }
 
+  /** フォーカスを失った */
   public blur(): void {
     this.paused = true;
     this.accumulatorMs = 0;
   }
 
+  /** フォーカス復帰 */
   public focus(): void {
     this.paused = false;
   }
 
+  /** 終了処理 */
   public reset(): void {
     this.input.destroy();
   }
 
+  /**
+   * 共通Text生成
+   */
   private createText(text: string, size: number, color: string): Text {
     return new Text({
       text,
@@ -173,6 +279,10 @@ export class MatchScreen extends Container {
     });
   }
 
+  /**
+   * ステージ背景描画
+   * 地面・背景・建物・装飾を描画
+   */
   private drawStage(): void {
     const art = this.stageArt;
     art.clear();
@@ -214,6 +324,10 @@ export class MatchScreen extends Container {
     }
   }
 
+  /**
+   * HUD描画
+   * 体力バー・ラウンド表示位置などを更新
+   */
   private drawHud(): void {
     const [left, right] = this.simulation.fighters;
     const art = this.hudArt;
@@ -242,6 +356,16 @@ export class MatchScreen extends Container {
     this.koText.position.set(STAGE_WIDTH / 2, 265);
   }
 
+  /**
+   * 体力バー描画
+   *
+   * @param x 表示位置X
+   * @param y 表示位置Y
+   * @param width バーの幅
+   * @param ratio 残体力(0～1)
+   * @param color バー色
+   * @param reverse 右側表示か
+   */
   private drawHealthBar(
     x: number,
     y: number,
@@ -259,6 +383,15 @@ export class MatchScreen extends Container {
     this.hudArt.roundRect(fillX, y + 3, fillWidth, 19, 5).fill({ color });
   }
 
+   /**
+   * 全表示更新
+   * ・キャラクター
+   * ・飛び道具
+   * ・HUD
+   * ・ラウンド表示
+   * ・勝者表示
+   * ・同期情報
+   */
   private refreshViews(): void {
     this.fighterViews[0].update();
     this.fighterViews[1].update();
@@ -266,19 +399,22 @@ export class MatchScreen extends Container {
     this.drawHud();
     this.roundText.text = `ROUND ${this.simulation.round}`;
     this.info.text = this.online
-      ? `ONLINE P${(this.onlinePlayer ?? 0) + 1}  •  INPUT LOCKSTEP  •  WASD / F G H Q  •  ↓ ↘ → + H = HADOKEN`
-      : "60Hz FIXED  •  WASD / F G H Q     ARROWS / NUM 1 2 3 0     XBOX: A X B RB  •  ↓ ↘ → + H";
+      ? `ONLINE P${(this.onlinePlayer ?? 0) + 1}  WASD / F G H Q  •  ↓ ↘ → + H = 波動拳`
+      : "WASD / F G H Q     十字キー / 1 2 3 0     XBOX: A X B RB  •  ↓ ↘ → + H = 波動拳";
     this.koText.text =
-      this.simulation.winner === null
-        ? ""
-        : `${this.simulation.fighters[this.simulation.winner].character.name}  WINS`;
-    const checksum = this.synchronizer.lastChecksum
-      .toString(16)
-      .padStart(8, "0")
-      .toUpperCase();
-    this.title.text = `FRAME FIGHTERS  •  SYNC ${this.synchronizer.frame}  #${checksum}`;
+      (this.simulation.winner === null)? 
+      "": `${this.simulation.fighters[this.simulation.winner].character.name}  WINS`;
+      // const checksum = this.synchronizer.lastChecksum
+      // .toString(16)
+      // .padStart(8, "0")
+      // .toUpperCase();
+    this.title.text = `FRAME FIGHTERS`;
   }
 
+  /**
+   * 飛び道具描画
+   * 全Projectileを円形エフェクトとして表示
+   */
   private drawProjectiles(): void {
     this.projectileArt.clear();
     for (const projectile of this.simulation.projectiles) {
