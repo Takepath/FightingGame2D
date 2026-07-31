@@ -1,5 +1,6 @@
 import type { Ticker } from "pixi.js";
 import { Container, Graphics, Text } from "pixi.js";
+
 import { FrameSynchronizer } from "./frameSynchronizer";
 import { FighterView } from "./fighterView";
 import { InputManager } from "./input";
@@ -77,6 +78,9 @@ export class MatchScreen extends Container {
   /** 自分のプレイヤー番号 */
   private onlinePlayer: 0 | 1 | null = null;
 
+  /**  タイマー表示 */
+  private readonly timer: Text; 
+
   /**
    * ゲームデータを設定
    */
@@ -120,6 +124,7 @@ export class MatchScreen extends Container {
     this.info = this.createText("", 14, "#a9c7ed");
     this.roundText = this.createText("ROUND 1", 24, "#ffffff");
     this.koText = this.createText("", 46, "#fff1a3");
+    this.timer = this.createText("99", 50, "#ffffff");
 
     // 描画順に追加
     this.world.addChild(
@@ -131,10 +136,11 @@ export class MatchScreen extends Container {
     );
 
     this.world.addChild(
-      this.title,
+      //this.title,
       this.info,
       this.roundText,
       this.koText,
+      this.timer,
     );
 
     this.addChild(this.world);
@@ -349,10 +355,11 @@ export class MatchScreen extends Container {
       true,
     );
 
-    this.title.position.set(STAGE_WIDTH / 2, 28);
+    //this.title.position.set(STAGE_WIDTH / 2, 28);
     this.info.position.set(STAGE_WIDTH / 2, 677);
     this.roundText.position.set(STAGE_WIDTH / 2, 77);
     this.koText.position.set(STAGE_WIDTH / 2, 265);
+    this.timer.position.set(STAGE_WIDTH / 2 , 28);
   }
 
   /**
@@ -408,6 +415,19 @@ export class MatchScreen extends Container {
       // .padStart(8, "0")
       // .toUpperCase();
     this.title.text = `FRAME FIGHTERS`;
+
+        let time: number = 99; 
+
+
+    const timercount = setInterval(() => {
+      time--;
+      
+      this.timer.text = time.toString();
+
+      if (time <= 0) { 
+        clearInterval(timercount); // 停止処理
+      }
+    }, 1000);
   }
 
   /**
