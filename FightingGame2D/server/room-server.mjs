@@ -5,6 +5,7 @@ const port = Number(process.env.ROOM_PORT ?? 8787);
 const rooms = new Map();
 
 function encodeFrame(text, opcode = 0x1) {
+  /** JSON文字列をブラウザへ返す最小限のWebSocketフレームへエンコードする。 */
   const payload = Buffer.from(text);
   const header =
     payload.length < 126
@@ -20,6 +21,7 @@ function encodeFrame(text, opcode = 0x1) {
 
 class Peer {
   constructor(socket, initialData) {
+    /** 1接続分の受信バッファ、ルーム所属、WebSocketイベントを初期化する。 */
     this.socket = socket;
     this.buffer = initialData;
     this.room = null;
@@ -31,16 +33,19 @@ class Peer {
   }
 
   send(message) {
+    /** 接続中のブラウザへプロトコルJSONをWebSocketテキストとして送る。 */
     if (!this.socket.destroyed)
       this.socket.write(encodeFrame(JSON.stringify(message)));
   }
 
   receive(data) {
+    /** 分割到着するWebSocketデータをバッファへ追加して解析する。 */
     this.buffer = Buffer.concat([this.buffer, data]);
     this.parseFrames();
   }
 
   parseFrames() {
+    /** クライアントが必ずマスクするWebSocketフレームを復号して処理する。 */
     while (this.buffer.length >= 2) {
       const first = this.buffer[0];
       const second = this.buffer[1];
@@ -82,17 +87,20 @@ class Peer {
   }
 
   close() {
+    /** ソケット終了時にルームから外し、残った相手へ退出を通知する。 */
     leaveRoom(this);
   }
 }
 
 function phraseOf(message) {
+  /** 合言葉の文字列型・長さを検証し、有効な値だけを返す。 */
   if (typeof message.phrase !== "string") return null;
   const phrase = message.phrase.trim();
   return phrase.length >= 4 && phrase.length <= 32 ? phrase : null;
 }
 
 function leaveRoom(peer) {
+  /** 退出者の役割に応じてルーム削除または待機状態への復帰を行う。 */
   const room = peer.room;
   if (!room) return;
   peer.room = null;
@@ -110,6 +118,7 @@ function leaveRoom(peer) {
 }
 
 function beginRoom(peer, message, mode) {
+  /** 合言葉で2人用ルームを新設するか、空きのある既存ルームへ参加する。 */
   const phrase = phraseOf(message);
   if (!phrase) {
     peer.send({
@@ -155,6 +164,7 @@ function beginRoom(peer, message, mode) {
 }
 
 function handleMessage(peer, message) {
+  /** クライアント要求を作成・参加・フレーム入力中継に振り分ける。 */
   if (!message || typeof message.type !== "string") {
     peer.send({ type: "error", message: "無効なメッセージです。" });
     return;
@@ -180,11 +190,13 @@ function handleMessage(peer, message) {
 }
 
 const server = createServer((_, response) => {
+  /** WebSocket非対応の通常HTTPアクセスにもサーバー稼働を返す。 */
   response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
   response.end("Frame Fighters room server\n");
 });
 
 server.on("upgrade", (request, socket, head) => {
+  /** HTTP Upgradeを完了し、WebSocket接続をPeerとして管理し始める。 */
   const key = request.headers["sec-websocket-key"];
   if (typeof key !== "string") {
     socket.destroy();
@@ -203,5 +215,6 @@ server.on("upgrade", (request, socket, head) => {
 });
 
 server.listen(port, "0.0.0.0", () => {
+  /** LAN内の別ブラウザから接続できる全インターフェースで待ち受ける。 */
   console.log(`Frame Fighters room server: ws://0.0.0.0:${port}`);
 });
