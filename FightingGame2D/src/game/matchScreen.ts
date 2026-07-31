@@ -1,6 +1,5 @@
 import type { Ticker } from "pixi.js";
 import { Container, Graphics, Text } from "pixi.js";
-
 import { FrameSynchronizer } from "./frameSynchronizer";
 import { FighterView } from "./fighterView";
 import { InputManager } from "./input";
