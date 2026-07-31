@@ -6,8 +6,9 @@ import { assetpackPlugin } from "./scripts/assetpack-vite-plugin";
 export default defineConfig({
   plugins: [assetpackPlugin()],
   server: {
-    port: 8080,
-    open: true,
+    host: "0.0.0.0",
+    port: 5173,
+    open: false,
   },
   define: {
     APP_VERSION: JSON.stringify(process.env.npm_package_version),
