@@ -136,6 +136,7 @@ export class MatchSimulation implements DeterministicSimulation {
     private readonly autoFacePlayerTwo = false,
   ) {
     /** 使用キャラクターとCSV技定義から、2人分の初期状態を生成する。 */
+<<<<<<< HEAD
     this.createMoveIndexes(moves);
     this.commandsById = new Map(
       commands.map((command) => [command.id, command]),
@@ -145,14 +146,24 @@ export class MatchSimulation implements DeterministicSimulation {
       ...commands.map((command) => command.maxFrames + 1),
     );
     this.roundIntroFrames = this.training ? 0 : ROUND_INTRO_FRAMES;
+=======
+    this.moves = moves;
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
     this.fighters = [this.createFighter(0), this.createFighter(1)];
   }
 
   public step(inputs: readonly [FrameInput, FrameInput]): void {
+<<<<<<< HEAD
     /** 60Hzの固定フレームでラウンド演出・時計・戦闘を決定論的に処理する。 */
     if (this.training && this.trainingResetFrames > 0) {
       this.trainingResetFrames -= 1;
       if (this.trainingResetFrames === 0) this.resetTrainingFighters();
+=======
+    /** 60Hzの固定フレームで両者の移動・攻撃・飛び道具・当たり判定を処理する。 */
+    if (this.winner !== null) {
+      this.roundEndFrame += 1;
+      if (this.roundEndFrame >= 240) this.nextRound();
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
       return;
     }
 
@@ -212,9 +223,52 @@ export class MatchSimulation implements DeterministicSimulation {
     this.resetFighters();
   }
 
+<<<<<<< HEAD
   /** トレーニング用の敵体力自動回復をオン・オフする。 */
   public setTrainingAutoRecovery(enabled: boolean): void {
     if (this.training) this.trainingAutoRecovery = enabled;
+=======
+  public checksum(): number {
+    /** 全状態をFNV-1aで要約し、端末間の同期ずれをHUDで確認できるようにする。 */
+    let hash = 0x811c9dc5;
+    const values = [this.round, this.winner ?? -1, this.roundEndFrame];
+    for (const fighter of this.fighters) {
+      values.push(
+        fighter.x,
+        fighter.y,
+        fighter.velocityX,
+        fighter.velocityY,
+        fighter.facing,
+        fighter.health,
+        fighter.actionFrame,
+        fighter.stun,
+        fighter.previousButtons,
+        fighter.activeMoveId ? fighter.activeMoveId.length : 0,
+        this.actionCode(fighter.action),
+        fighter.projectileSpawned ? 1 : 0,
+        ...fighter.inputHistory,
+      );
+    }
+    values.push(this.projectiles.length);
+    for (const projectile of this.projectiles) {
+      values.push(
+        projectile.owner,
+        projectile.x,
+        projectile.y,
+        projectile.velocityX,
+        projectile.life,
+        projectile.damage,
+        projectile.knockbackX,
+        projectile.knockbackY,
+        projectile.hitstun,
+      );
+    }
+    for (const value of values) {
+      hash ^= value | 0;
+      hash = Math.imul(hash, 0x01000193);
+    }
+    return hash >>> 0;
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
   }
 
   private createFighter(player: PlayerId): FighterState {
@@ -242,6 +296,7 @@ export class MatchSimulation implements DeterministicSimulation {
     };
   }
 
+<<<<<<< HEAD
   /** CPUであるP2だけは、相手を通り越した時も攻撃方向を自動で合わせる。 */
   private updateCpuFacing(): void {
     if (!this.autoFacePlayerTwo) return;
@@ -302,6 +357,14 @@ export class MatchSimulation implements DeterministicSimulation {
       this.distanceToHurtboxY(projectile.y, defender) <=
         PROJECTILE_HITBOX_RADIUS
     );
+=======
+  private updateFacing(): void {
+    /** 相手の位置に応じて、両者が常に相手方向を向くように更新する。 */
+    const [left, right] = this.fighters;
+    if (left.x === right.x) return;
+    left.facing = left.x < right.x ? 1 : -1;
+    right.facing = left.facing === 1 ? -1 : 1;
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
   }
 
   private updateFighter(fighter: FighterState, input: FrameInput): void {
@@ -435,6 +498,7 @@ export class MatchSimulation implements DeterministicSimulation {
     newlyPressed: number,
     useState: MoveUseState,
   ): MoveDefinition | undefined {
+<<<<<<< HEAD
     /** 新規押下と現在の地上・空中状態から、CSVコマンド技を優先して選ぶ。 */
     const candidates = this.movesByCharacter.get(fighter.character.id) ?? [];
     for (const move of candidates) {
@@ -446,6 +510,22 @@ export class MatchSimulation implements DeterministicSimulation {
       ) {
         return move;
       }
+=======
+    /** 新規押下から技を選び、波動拳コマンド時は飛び道具を優先する。 */
+    const candidates = this.moves.filter(
+      (move) =>
+        move.characterId === "all" || move.characterId === fighter.character.id,
+    );
+    if (
+      (newlyPressed & InputButton.Special) !== 0 &&
+      this.isHadokenCommand(fighter)
+    ) {
+      return candidates.find(
+        (move) =>
+          move.attackType === "projectile" &&
+          (newlyPressed & move.button) !== 0,
+      );
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
     }
     for (const move of candidates) {
       if (
@@ -579,7 +659,10 @@ export class MatchSimulation implements DeterministicSimulation {
 
   private updateProjectiles(inputs: readonly [FrameInput, FrameInput]): void {
     /** 飛び道具を移動し、相手への命中・ガード・寿命切れを判定する。 */
+<<<<<<< HEAD
     if (this.winner !== null) return;
+=======
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
     for (let index = this.projectiles.length - 1; index >= 0; index -= 1) {
       const projectile = this.projectiles[index];
       projectile.x += projectile.velocityX;
@@ -615,8 +698,12 @@ export class MatchSimulation implements DeterministicSimulation {
     >,
     defenderInput: FrameInput,
   ): void {
+<<<<<<< HEAD
     /** 近接技と飛び道具に共通する上中下ガード、ダメージ、KO処理を適用する。 */
     const guardStance = this.guardStanceFor(defender, attacker, defenderInput);
+=======
+    /** 近接技と飛び道具に共通するダメージ、ノックバック、KO処理を適用する。 */
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
     const defending =
       guardStance !== null &&
       this.canGuardAttack(guardStance, attack.attackLevel);
@@ -694,13 +781,18 @@ export class MatchSimulation implements DeterministicSimulation {
   }
 
   private recordInput(fighter: FighterState, buttons: number): void {
+<<<<<<< HEAD
     /** commands.csv の最大猶予フレームに合わせ、方向入力履歴を保持する。 */
+=======
+    /** 波動拳コマンド判定用に、直近18フレームの入力履歴を保持する。 */
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
     fighter.inputHistory.push(buttons);
     if (fighter.inputHistory.length > this.inputHistoryLimit) {
       fighter.inputHistory.shift();
     }
   }
 
+<<<<<<< HEAD
   /** command_idが指す方向入力列を、現在の向きを基準にして照合する。 */
   private matchesCommand(fighter: FighterState, commandId: string): boolean {
     const command = this.commandsById.get(commandId);
@@ -709,6 +801,11 @@ export class MatchSimulation implements DeterministicSimulation {
 
     let sequenceIndex = command.sequence.length - 1;
     const currentButtons = history[history.length - 1];
+=======
+  private isHadokenCommand(fighter: FighterState): boolean {
+    /** ↓、↓＋前、前＋必殺の順序が短時間で入力されたか判定する。 */
+    const current = fighter.inputHistory[fighter.inputHistory.length - 1] ?? 0;
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
     if (
       !this.matchesCommandDirection(
         currentButtons,
@@ -739,6 +836,7 @@ export class MatchSimulation implements DeterministicSimulation {
     return sequenceIndex < 0;
   }
 
+<<<<<<< HEAD
   /** commands.csv のテンキー方向と、実際の十字入力が一致するかを返す。 */
   private matchesCommandDirection(
     buttons: number,
@@ -825,6 +923,17 @@ export class MatchSimulation implements DeterministicSimulation {
 
   private resolveCollision(): void {
     /** 本体幅に余白を足した押し戻し判定で、足元の重なりだけを防ぐ。 */
+=======
+  private isForward(buttons: number, facing: -1 | 1): boolean {
+    /** キャラクターの向きから、入力が「前」かどうかを解釈する。 */
+    return (
+      (buttons & (facing === 1 ? InputButton.Right : InputButton.Left)) !== 0
+    );
+  }
+
+  private resolveCollision(): void {
+    /** キャラクター同士の重なりをプレイヤー番号基準で安定して押し戻す。 */
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
     const [first, second] = this.fighters;
     if (Math.abs(first.y - second.y) >= PASS_THROUGH_HEIGHT) return;
     const distance = second.x - first.x;
@@ -850,8 +959,12 @@ export class MatchSimulation implements DeterministicSimulation {
   }
 
   private nextRound(): void {
+<<<<<<< HEAD
     /** ラウンド結果後、決着済みでなければ次ラウンドを開始する。 */
     if (this.training || this.matchWinner !== null) return;
+=======
+    /** KO演出後にラウンド数を進め、両者を開始位置へ戻す。 */
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
     this.round += 1;
     this.winner = null;
     this.roundEndFrame = 0;
@@ -899,4 +1012,23 @@ export class MatchSimulation implements DeterministicSimulation {
     Object.assign(this.fighters[0], this.createFighter(0));
     Object.assign(this.fighters[1], this.createFighter(1));
   }
+<<<<<<< HEAD
+=======
+
+  private actionCode(action: FighterAction): number {
+    /** 文字列アクションをチェックサムに混ぜるための安定した数値へ変換する。 */
+    const actions: FighterAction[] = [
+      "idle",
+      "walk",
+      "jump",
+      "light",
+      "heavy",
+      "special",
+      "hit",
+      "block",
+      "ko",
+    ];
+    return actions.indexOf(action);
+  }
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
 }

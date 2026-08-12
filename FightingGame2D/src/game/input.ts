@@ -1,5 +1,6 @@
 import { type FrameInput, InputButton, type PlayerId } from "./types";
 
+<<<<<<< HEAD
 /** Escは常にキャンセルに使うため、キーコンフィグの対象外とする。 */
 export const FIXED_CANCEL_KEY_CODE = "Escape";
 
@@ -77,6 +78,22 @@ const MODIFIER_KEY_CODES = new Set([
 
 /** 初回起動時・リセット時に用いる標準キー配置。 */
 const DEFAULT_KEYBOARD_BINDINGS: KeyboardBindings = {
+=======
+/**
+ * キーボード操作割り当て
+ *
+ * Player0
+ *  A D W S : 移動
+ *  F G H   : 攻撃
+ *  Q       : ガード
+ *
+ * Player1
+ *  矢印キー : 移動
+ *  テンキー1,2,3 : 攻撃
+ *  テンキー0     : ガード
+ */
+const keyboardBindings: Record<PlayerId, Record<string, InputButton>> = {
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
   0: {
     left: "KeyA",
     right: "KeyD",
@@ -99,6 +116,7 @@ const DEFAULT_KEYBOARD_BINDINGS: KeyboardBindings = {
   },
 };
 
+<<<<<<< HEAD
 /** 初期値を参照渡しせずに使うため、キー配置を複製する。 */
 function cloneKeyboardBindings(): KeyboardBindings {
   return {
@@ -285,28 +303,54 @@ export class KeyboardConfig {
 export const keyboardConfig = new KeyboardConfig();
 
 /** Xboxのボタン状態を押下・アナログ入力の両方から判定する。 */
+=======
+/**
+ * ゲームパッドのボタン押下判定
+ *
+ * ボタンが押されている、またはアナログ値が一定以上ならtrueを返す。
+ */
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
 function buttonDown(gamepad: Gamepad, index: number): boolean {
   return Boolean(
     gamepad.buttons[index]?.pressed ||
-    (gamepad.buttons[index]?.value ?? 0) > 0.5,
+      (gamepad.buttons[index]?.value ?? 0) > 0.5,
   );
 }
 
 /**
+<<<<<<< HEAD
  * キーボードとXboxゲームパッドの状態を、シミュレーション用入力へ変換する。
  * 後ろ入力は対戦ロジック側で立ち・しゃがみガードへ解釈する。
  * 向き反転キーと左右移動キーの同時入力は、設定済みのキー配置でも向き反転として扱う。
  */
 export class InputManager {
   /** 現在押されているキーボードキー。 */
+=======
+ * 入力管理クラス
+ *
+ * キーボード・ゲームパッドの入力を取得し、
+ * シミュレーションで使用する入力データ(FrameInput)へ変換する。
+ *
+ * シミュレーション中は直接デバイスを参照せず、
+ * 毎フレーム取得した入力のみを利用する。
+ */
+export class InputManager {
+  /** 現在押されているキー一覧 */
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
   private readonly heldKeys = new Set<string>();
 
   public constructor() {
+    //====================================================
+    // キーボードイベント登録
+    //====================================================
     window.addEventListener("keydown", this.onKeyDown);
     window.addEventListener("keyup", this.onKeyUp);
+
+    // ウィンドウ非アクティブ時は入力をリセット
     window.addEventListener("blur", this.clear);
   }
 
+<<<<<<< HEAD
   /** 指定プレイヤーの現在の入力をフレーム入力へ変換する。 */
   public sample(player: PlayerId): FrameInput {
     let buttons = 0;
@@ -330,34 +374,91 @@ export class InputManager {
 
     const gamepad = navigator.getGamepads()[player];
     if (gamepad?.connected) buttons |= this.sampleXboxGamepad(gamepad);
+=======
+  //====================================================
+  // 指定プレイヤーの入力取得
+  //====================================================
+  public sample(player: PlayerId): FrameInput {
+    let buttons = 0;
+
+    //====================================================
+    // キーボード入力取得
+    //====================================================
+    for (const [key, bit] of Object.entries(keyboardBindings[player])) {
+      if (this.heldKeys.has(key)) {
+        buttons |= bit;
+      }
+    }
+
+    //====================================================
+    // ゲームパッド入力取得
+    //====================================================
+    const gamepad = navigator.getGamepads()[player];
+
+    if (gamepad?.connected) {
+      buttons |= this.sampleXboxGamepad(gamepad);
+    }
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
 
     return { buttons };
   }
 
+<<<<<<< HEAD
   /** 登録したブラウザイベントを解除する。 */
+=======
+  //====================================================
+  // イベント解除
+  //====================================================
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
   public destroy(): void {
     window.removeEventListener("keydown", this.onKeyDown);
     window.removeEventListener("keyup", this.onKeyUp);
     window.removeEventListener("blur", this.clear);
   }
 
+<<<<<<< HEAD
   /** ゲーム操作キーを記録し、ブラウザ標準操作を抑止する。 */
+=======
+  //====================================================
+  // キー押下処理
+  //====================================================
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
   private onKeyDown = (event: KeyboardEvent): void => {
-    if (this.isGameKey(event.code)) event.preventDefault();
+    // ゲームで使用するキーはブラウザ既定動作を無効化
+    if (this.isGameKey(event.code)) {
+      event.preventDefault();
+    }
+
     this.heldKeys.add(event.code);
   };
 
+<<<<<<< HEAD
   /** 離されたゲーム操作キーを記録から外す。 */
+=======
+  //====================================================
+  // キー離し処理
+  //====================================================
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
   private onKeyUp = (event: KeyboardEvent): void => {
-    if (this.isGameKey(event.code)) event.preventDefault();
+    if (this.isGameKey(event.code)) {
+      event.preventDefault();
+    }
+
     this.heldKeys.delete(event.code);
   };
 
+<<<<<<< HEAD
   /** ウィンドウが非アクティブになった時に押下状態をリセットする。 */
+=======
+  //====================================================
+  // 入力状態初期化
+  //====================================================
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
   private clear = (): void => {
     this.heldKeys.clear();
   };
 
+<<<<<<< HEAD
   /** 現在のキーコンフィグに含まれる操作キーかを判定する。 */
   private isGameKey(code: string): boolean {
     return PLAYERS.some((player) =>
@@ -368,11 +469,28 @@ export class InputManager {
   }
 
   /** Xboxゲームパッドをゲーム内ボタンへ変換する。 */
+=======
+  //====================================================
+  // ゲーム用キーか判定
+  //====================================================
+  private isGameKey(code: string): boolean {
+    return Object.values(keyboardBindings).some(
+      (bindings) => code in bindings,
+    );
+  }
+
+  //====================================================
+  // Xboxゲームパッド入力取得
+  //====================================================
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
   private sampleXboxGamepad(gamepad: Gamepad): number {
     let buttons = 0;
+
+    // アナログスティック
     const horizontal = gamepad.axes[0] ?? 0;
     const vertical = gamepad.axes[1] ?? 0;
 
+<<<<<<< HEAD
     if (horizontal < -0.45 || buttonDown(gamepad, 14)) {
       buttons |= InputButton.Left;
     }
@@ -382,13 +500,58 @@ export class InputManager {
     if (vertical < -0.45 || buttonDown(gamepad, 12)) {
       buttons |= InputButton.Up;
     }
+=======
+    //====================================================
+    // 移動入力
+    // スティックまたは十字キーに対応
+    //====================================================
+    if (horizontal < -0.45 || buttonDown(gamepad, 14)) {
+      buttons |= InputButton.Left;
+    }
+
+    if (horizontal > 0.45 || buttonDown(gamepad, 15)) {
+      buttons |= InputButton.Right;
+    }
+
+    if (vertical < -0.45 || buttonDown(gamepad, 12)) {
+      buttons |= InputButton.Up;
+    }
+
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
     if (vertical > 0.45 || buttonDown(gamepad, 13)) {
       buttons |= InputButton.Down;
     }
 
+<<<<<<< HEAD
     if (buttonDown(gamepad, 0)) buttons |= InputButton.Light;
     if (buttonDown(gamepad, 2)) buttons |= InputButton.Heavy;
     if (buttonDown(gamepad, 1)) buttons |= InputButton.Special;
+=======
+    //====================================================
+    // 攻撃・ガード入力
+    //
+    // Xbox標準配置
+    // A : 弱攻撃
+    // X : 強攻撃
+    // B : 必殺技
+    // RB: ガード
+    //====================================================
+    if (buttonDown(gamepad, 0)) {
+      buttons |= InputButton.Light;
+    }
+
+    if (buttonDown(gamepad, 2)) {
+      buttons |= InputButton.Heavy;
+    }
+
+    if (buttonDown(gamepad, 1)) {
+      buttons |= InputButton.Special;
+    }
+
+    if (buttonDown(gamepad, 5)) {
+      buttons |= InputButton.Block;
+    }
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
 
     return buttons;
   }

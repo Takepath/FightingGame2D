@@ -8,7 +8,4 @@ export default defineConfig({
     open: false,
     allowedHosts: ["kudos-audible-pending.ngrok-free.dev"],
   },
-  define: {
-    APP_VERSION: JSON.stringify(process.env.npm_package_version),
-  },
 });

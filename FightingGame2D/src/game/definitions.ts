@@ -14,6 +14,7 @@ import {
   type MoveUseState,
 } from "./types";
 
+<<<<<<< HEAD
 /** ゲームデータCSVの読み込み元。ゲーム設定から差し替えられる。 */
 export interface GameDataSourcePaths {
   charactersCsv: string;
@@ -24,6 +25,8 @@ export interface GameDataSourcePaths {
 /** キャラクター選択画面が扱える絶対上限。 */
 export const MAX_SELECTABLE_CHARACTERS = 25;
 
+=======
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
 /**
  * CSVで定義されたボタン名をゲーム内のInputButton列挙値へ変換する対応表
  */
@@ -33,6 +36,7 @@ const buttonNames: Record<string, InputButton> = {
   special: InputButton.Special,
 };
 
+<<<<<<< HEAD
 /** commands.csv の sequence で指定できるテンキー方向一覧。 */
 const commandDirections = new Set<CommandDirection>([
   "1",
@@ -46,6 +50,8 @@ const commandDirections = new Set<CommandDirection>([
   "9",
 ]);
 
+=======
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
 /**
  * ゲーム内リソースのURLを生成する
  * BASE_URLを考慮して相対パスを絶対パスへ変換する
@@ -94,6 +100,7 @@ function toAction(value: string): FighterAction {
     : "idle";
 }
 
+<<<<<<< HEAD
 /** CSVの use_state を、技の使用可能状態として安全に変換する。 */
 function toMoveUseState(value: string): MoveUseState {
   if (value === "air") return "air";
@@ -108,6 +115,8 @@ function toAttackLevel(value: string): AttackLevel {
   return "mid";
 }
 
+=======
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
 /**
  * キャラクター定義CSVをCharacterDefinition配列へ変換する
  */
@@ -116,6 +125,7 @@ function parseCharacters(source: string): CharacterDefinition[] {
     id: row.id,
     name: row.name,
 
+<<<<<<< HEAD
     // 描画方式（未指定時は棒人間）。
     renderType: row.render_type === "blender" ? "blender" : "stick",
 
@@ -125,6 +135,14 @@ function parseCharacters(source: string): CharacterDefinition[] {
     // キャラクター選択画面に表示するPNGアイコン
     iconAsset: row.icon_asset,
 
+=======
+    // 描画方式（未指定時は棒人間）
+    renderType: row.render_type === "blender" ? "blender" : "stick",
+
+    // Blenderアニメーションファイル
+    animationAsset: row.animation_asset,
+
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
     // キャラクターカラー
     primaryColor: toColor(row.primary_color),
     accentColor: toColor(row.accent_color),
@@ -170,12 +188,15 @@ function parseMoves(source: string): MoveDefinition[] {
     // 再生するアニメーション
     animation: toAction(row.animation),
 
+<<<<<<< HEAD
     // 使用可能状態（地上 / 空中 / 両方）
     useState: toMoveUseState(row.use_state),
 
     // 上・中・下属性（未指定時は中段）
     attackLevel: toAttackLevel(row.attack_level),
 
+=======
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
     // 攻撃種別（未指定時は近接攻撃）
     attackType: row.attack_type === "projectile" ? "projectile" : "melee",
 
@@ -188,6 +209,7 @@ function parseMoves(source: string): MoveDefinition[] {
   }));
 }
 
+<<<<<<< HEAD
 /** commands.csv をゲーム内で使う方向コマンド定義へ変換する。 */
 function parseCommands(source: string): CommandDefinition[] {
   return csvRecords(source).map((row, index) => {
@@ -228,10 +250,13 @@ function parseCommands(source: string): CommandDefinition[] {
   });
 }
 
+=======
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
 /**
  * ゲームで使用する全データを読み込む
  * - キャラクター定義
  * - 技データ
+<<<<<<< HEAD
  * - コマンド定義
  */
 export async function loadGameData(
@@ -243,15 +268,32 @@ export async function loadGameData(
     loadText(paths.charactersCsv),
     loadText(paths.movesCsv),
     loadText(paths.commandsCsv),
+=======
+ * - Blenderアニメーション
+ */
+export async function loadGameData(): Promise<GameData> {
+  // CSVファイルを並列で読み込む
+  const [characterCsv, moveCsv] = await Promise.all([
+    loadText("data/characters.csv"),
+    loadText("data/moves.csv"),
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
   ]);
 
   // CSVをゲームデータへ変換
   const characters = parseCharacters(characterCsv);
   const moves = parseMoves(moveCsv);
+<<<<<<< HEAD
   const commands = parseCommands(commandCsv);
 
   // Blender指定キャラクターの、書き出し済みアニメーションJSONを並列で読み込む。
   const blenderAnimations: Record<string, BlenderAnimationData> = {};
+=======
+
+  // キャラクターごとのBlenderアニメーションを保持
+  const blenderAnimations: Record<string, BlenderAnimationData> = {};
+
+  // Blender描画キャラクターのアニメーションを並列読み込み
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
   await Promise.all(
     characters
       .filter(
@@ -260,13 +302,19 @@ export async function loadGameData(
       )
       .map(async (character) => {
         const response = await fetch(gameUrl(character.animationAsset));
+
+        // アニメーションが存在しない場合は棒人間描画へフォールバック
         if (!response.ok) {
+<<<<<<< HEAD
           // 任意アセットの読み込み失敗でゲーム全体を止めず、棒人間描画へフォールバックする。
+=======
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
           console.warn(
             `${character.name} のBlenderアニメーションを読み込めないため棒人間で描画します`,
           );
           return;
         }
+<<<<<<< HEAD
         const animation = (await response.json()) as BlenderAnimationData;
 
         // スプライト形式では、対戦画面を生成する前にPNGをPixiのテクスチャキャッシュへ登録する。
@@ -290,11 +338,22 @@ export async function loadGameData(
   }
 
   // 対戦ゲームのため最低2キャラクター、選択画面の仕様上は最大25キャラクターに制限する。
+=======
+
+        // 読み込んだアニメーションデータを保存
+        blenderAnimations[character.id] =
+          (await response.json()) as BlenderAnimationData;
+      }),
+  );
+
+  // 対戦ゲームのため最低2キャラクター必要
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
   if (characters.length < 2) {
     throw new Error(
       "characters.csv には2人以上のキャラクターを定義してください",
     );
   }
+<<<<<<< HEAD
   if (characters.length > maxCharacters) {
     throw new Error(
       `characters.csv は最大${maxCharacters}人まで定義できます（現在${characters.length}人）`,
@@ -319,12 +378,17 @@ export async function loadGameData(
       );
     }
   }
+=======
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
 
   // 全ゲームデータを返す
   return {
     characters,
     moves,
+<<<<<<< HEAD
     commands,
+=======
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
     blenderAnimations,
   };
 }

@@ -27,17 +27,31 @@ export function parseCsv(source: string): string[][] {
       cell += '"';
       index += 1;
 
+<<<<<<< HEAD
       // ダブルクォーテーション開始・終了を切り替える
     } else if (char === '"') {
       quoted = !quoted;
 
       // クォーテーション外のカンマはセル区切り
+=======
+    // ダブルクォーテーション開始・終了を切り替える
+    } else if (char === '"') {
+      quoted = !quoted;
+
+    // クォーテーション外のカンマはセル区切り
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
     } else if (char === "," && !quoted) {
       row.push(cell.trim());
       cell = "";
 
+<<<<<<< HEAD
       // クォーテーション外の改行は行区切り
     } else if ((char === "\n" || char === "\r") && !quoted) {
+=======
+    // クォーテーション外の改行は行区切り
+    } else if ((char === "\n" || char === "\r") && !quoted) {
+
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
       // Windows形式(CRLF)の改行に対応
       if (char === "\r" && next === "\n") index += 1;
 
@@ -53,7 +67,11 @@ export function parseCsv(source: string): string[][] {
       row = [];
       cell = "";
 
+<<<<<<< HEAD
       // 通常文字は現在のセルへ追加
+=======
+    // 通常文字は現在のセルへ追加
+>>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
     } else {
       cell += char;
     }
