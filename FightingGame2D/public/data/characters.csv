@@ -1,3 +1,4 @@
-id,name,render_type,animation_asset,primary_color,accent_color,max_health,walk_speed,jump_velocity
-blender_hero,BLENDER HERO,blender,data/animations/blender_hero.json,#4FD8FF,#FFC857,100,430,1900
-stick_rival,STICK RIVAL,stick,,#FF5D8F,#B985FF,100,455,1960
+id,name,render_type,animation_asset,icon_asset,primary_color,accent_color,max_health,walk_speed,jump_velocity,hurtbox_width,hurtbox_top,hurtbox_bottom
+blender_hero,B-HERO,stick,data/animations/blender_hero.json,,#4FD8FF,#FFC857,100,330,1900,52,150,24
+stickMan,STICK　MAN,stick,,,#FF5D8F,#B985FF,100,330,1960,52,150,24
+crocodile_soldier,CROCODILE SOLDIER,blender,data/animations/crocodile_soldier.json,data/icons/crocodile-soldier.png,#5E8F3E,#F58B28,110,300,1820,72,178,20

@@ -1,3 +1,4 @@
+/** 最小論理解像度とレターボックス設定からレンダラーの実解像度を求める。 */
 export function resize(
   w: number,
   h: number,

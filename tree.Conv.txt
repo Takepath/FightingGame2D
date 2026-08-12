@@ -1,0 +1,87 @@
+ 2Däiì¨ÉQÅ[ÉÄ
+|package-lock.json
+|   
+|_FightingGame2D
+    |   .gitignore
+    |   eslint.config.mjs
+    |   index.html
+    |   package.json
+    |   tsconfig.json
+    |   vite.config.ts
+    |   
+    |_public
+    |       favicon.png
+    |       style.css
+    |       
+    |_raw-assets
+    |   |_main{m}
+    |   |   |   logo-white.svg
+    |   |   |   
+    |   |   |_sounds
+    |   |   |       bgm-main.mp3
+    |   |   |       sfx-hover.wav
+    |   |   |       sfx-press.wav
+    |   |   |       
+    |   |   |_ui{tps}
+    |   |           button.png
+    |   |           icon-pause.png
+    |   |           icon-settings.png
+    |   |           rounded-rectangle.png
+    |   |           
+    |   |_preload{m}
+    |           logo.svg
+    |           
+    |_scripts
+    |       assetpack-vite-plugin.ts
+    |       
+    |_src
+        |   main.ts
+        |   pixi-mixins.d.ts
+        |   vite-env.d.ts
+        |   
+        |_app
+        |   |   getEngine.ts
+        |   |   
+        |   |_popups
+        |   |       PausePopup.ts
+        |   |       SettingsPopup.ts
+        |   |       
+        |   |_screens
+        |   |   |   LoadScreen.ts
+        |   |   |   
+        |   |   |_main
+        |   |           Bouncer.ts
+        |   |           Logo.ts
+        |   |           MainScreen.ts
+        |   |           
+        |   |_ui
+        |   |       Button.ts
+        |   |       Label.ts
+        |   |       RoundedBox.ts
+        |   |       VolumeSlider.ts
+        |   |       
+        |   |_utils
+        |           userSettings.ts
+        |           
+        |_engine
+            |   engine.ts
+            |   
+            |_audio
+            |       audio.ts
+            |       AudioPlugin.ts
+            |       
+            |_navigation
+            |       navigation.ts
+            |       NavigationPlugin.ts
+            |       
+            |_resize
+            |       resize.ts
+            |       ResizePlugin.ts
+            |       
+            |_utils
+                    getResolution.ts
+                    maths.ts
+                    random.ts
+                    storage.ts
+                    waitFor.ts
+                    

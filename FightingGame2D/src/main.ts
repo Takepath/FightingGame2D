@@ -1,42 +1,30 @@
-import { setEngine } from "./app/getEngine";
-import { LoadScreen } from "./app/screens/LoadScreen";
-import { userSettings } from "./app/utils/userSettings";
 import { CreationEngine } from "./engine/engine";
 import { loadGameData } from "./game/definitions";
-import { MatchScreen } from "./game/matchScreen";
-import { RoomLobby } from "./game/roomLobby";
+import { FIGHTING_GAME_CONFIG } from "./game/gameConfig";
+import { MenuFlow } from "./game/menuFlow";
 
-/**
- * Importing these modules will automatically register there plugins with the engine.
- */
-import "@pixi/sound";
-// import "@esotericsoftware/spine-pixi-v8";
+/** PixiJSサウンド機能をエンジンプラグインとして登録する。 */
 
-// Create a new creation engine instance
+// アプリ全体で共有するPixiJSエンジンを生成する。
 const engine = new CreationEngine();
-setEngine(engine);
 
 (async () => {
-  // Initialize the creation engine instance
+  // 1280×720基準のゲーム描画と60FPS上限を初期化する。
   await engine.init({
-    background: "#080d1c",
-    resizeOptions: { minWidth: 1280, minHeight: 720, letterbox: false },
+    background: FIGHTING_GAME_CONFIG.engine.background,
+    resizeOptions: FIGHTING_GAME_CONFIG.engine.resize,
   });
-  engine.ticker.maxFPS = 60;
+  engine.ticker.maxFPS = FIGHTING_GAME_CONFIG.engine.maxFps;
 
-  // Initialize the user settings
-  userSettings.init();
-
-  // Show the load screen
-  await engine.navigation.showScreen(LoadScreen);
-  // CSV and Blender-exported skeletal samples are loaded before the first match.
-  MatchScreen.configure(await loadGameData());
-  await engine.navigation.showScreen(MatchScreen);
-  const match = engine.navigation.currentScreen;
-  if (match instanceof MatchScreen) {
-    new RoomLobby(
-      (client) => match.startOnline(client),
-      () => match.stopOnline(),
-    );
-  }
+  // 音量などの利用者設定を読み込む。
+  // アセット読み込み中の画面を表示する。
+  // CSVとBlender出力の骨格アニメーションを読み込み、Top画面から遷移を開始する。
+  new MenuFlow(
+    engine,
+    await loadGameData(
+      FIGHTING_GAME_CONFIG.data,
+      FIGHTING_GAME_CONFIG.characterSelect.maxCharacters,
+    ),
+    FIGHTING_GAME_CONFIG,
+  );
 })();

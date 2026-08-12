@@ -5,21 +5,14 @@ import type { CreationEngine } from "../engine";
 
 import { Navigation } from "./navigation";
 
-/**
- * Middleware for Application's navigation functionality.
- *
- * Adds the following methods to Application:
- * * Application#navigation
- */
+/** PixiJSアプリケーションへ画面遷移管理を追加する拡張。 */
 export class CreationNavigationPlugin {
   /** @ignore */
   public static extension: ExtensionMetadata = ExtensionType.Application;
 
   private static _onResize: (() => void) | null;
 
-  /**
-   * Initialize the plugin with scope of application instance
-   */
+  /** アプリケーション単位の画面遷移管理を初期化する。 */
   public static init(): void {
     const app = this as unknown as CreationEngine;
 
@@ -29,13 +22,16 @@ export class CreationNavigationPlugin {
       app.navigation.resize(app.renderer.width, app.renderer.height);
     app.renderer.on("resize", this._onResize);
     app.resize();
+    // リサイズイベントの発火順に依存せず、初期Canvasサイズを画面遷移側へ渡す。
+    app.navigation.resize(app.renderer.width, app.renderer.height);
   }
 
-  /**
-   * Clean up the ticker, scoped to application
-   */
+  /** リサイズ監視を解除して画面遷移管理への参照を外す。 */
   public static destroy(): void {
     const app = this as unknown as Application;
+    if (this._onResize) app.renderer.off("resize", this._onResize);
+    this._onResize = null;
+    app.navigation.destroy();
     app.navigation = null as unknown as Navigation;
   }
 }

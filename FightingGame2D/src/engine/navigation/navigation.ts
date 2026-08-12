@@ -1,226 +1,103 @@
 import type { Ticker } from "pixi.js";
-import { Assets, BigPool, Container } from "pixi.js";
+import { Container } from "pixi.js";
 
 import type { CreationEngine } from "../engine";
 
-/** Interface for app screens */
+/** 現在のゲームで必要な画面ライフサイクル。 */
 interface AppScreen extends Container {
-  /** Show the screen */
-  show?(): Promise<void>;
-  /** Hide the screen */
-  hide?(): Promise<void>;
-  /** Pause the screen */
-  pause?(): Promise<void>;
-  /** Resume the screen */
-  resume?(): Promise<void>;
-  /** Prepare screen, before showing */
-  prepare?(): void;
-  /** Reset screen, after hidden */
+  /** 画面が切り替わるときにDOMイベントなどを後始末する。 */
   reset?(): void;
-  /** Update the screen, passing delta time/step */
+  /** 描画フレームごとに呼び出す更新処理。 */
   update?(time: Ticker): void;
-  /** Resize the screen */
+  /** Canvasサイズに合わせて画面を再配置する。 */
   resize?(width: number, height: number): void;
-  /** Blur the screen */
+  /** ブラウザが非アクティブになったときの処理。 */
   blur?(): void;
-  /** Focus the screen */
+  /** ブラウザが再びアクティブになったときの処理。 */
   focus?(): void;
-  /** Method to react on assets loading progress */
-  onLoad?: (progress: number) => void;
 }
 
-/** Interface for app screens constructors */
+/** 表示できる画面クラスのコンストラクター。 */
 interface AppScreenConstructor {
   new (): AppScreen;
-  /** List of assets bundles required by the screen */
-  assetBundles?: string[];
 }
 
+/** PixiJS上のゲーム画面を1枚だけ管理する。 */
 export class Navigation {
-  /** Reference to the main application */
+  /** 親となるゲームエンジン。 */
   public app!: CreationEngine;
 
-  /** Container for screens */
-  public container = new Container();
+  /** 表示中の画面を載せるコンテナ。 */
+  public readonly container = new Container();
 
-  /** Application width */
+  /** 現在の描画幅。 */
   public width = 0;
 
-  /** Application height */
+  /** 現在の描画高さ。 */
   public height = 0;
 
-  /** Constant background view for all screens */
-  public background?: AppScreen;
-
-  /** Current screen being displayed */
+  /** 現在表示中の画面。 */
   public currentScreen?: AppScreen;
 
-  /** Current popup being displayed */
-  public currentPopup?: AppScreen;
-
-  public init(app: CreationEngine) {
+  /** エンジン初期化時に親アプリケーションを記録する。 */
+  public init(app: CreationEngine): void {
     this.app = app;
   }
 
-  /** Set the  default load screen */
-  public setBackground(ctor: AppScreenConstructor) {
-    this.background = new ctor();
-    this.addAndShowScreen(this.background);
-  }
+  /** 現在の画面を破棄して、新しい画面へ切り替える。 */
+  public showScreen(ctor: AppScreenConstructor): void {
+    this.clearScreen();
 
-  /** Add screen to the stage, link update & resize functions */
-  private async addAndShowScreen(screen: AppScreen) {
-    // Add navigation container to stage if it does not have a parent yet
-    if (!this.container.parent) {
-      this.app.stage.addChild(this.container);
-    }
+    const screen = new ctor();
+    this.currentScreen = screen;
 
-    // Add screen to stage
+    if (!this.container.parent) this.app.stage.addChild(this.container);
     this.container.addChild(screen);
-
-    // Setup things and pre-organise screen before showing
-    if (screen.prepare) {
-      screen.prepare();
-    }
-
-    // Add screen's resize handler, if available
-    if (screen.resize) {
-      // Trigger a first resize
-      screen.resize(this.width, this.height);
-    }
-
-    // Add update function if available
-    if (screen.update) {
-      this.app.ticker.add(screen.update, screen);
-    }
-
-    // Show the new screen
-    if (screen.show) {
-      screen.interactiveChildren = false;
-      await screen.show();
-      screen.interactiveChildren = true;
-    }
+    // 初期化直後はresizeイベントより先に画面を開く可能性があるため、
+    // 未記録のサイズはレンダラーの現在値で補う。
+    screen.resize?.(
+      this.width || this.app.renderer.width,
+      this.height || this.app.renderer.height,
+    );
+    if (screen.update) this.app.ticker.add(screen.update, screen);
   }
 
-  /** Remove screen from the stage, unlink update & resize functions */
-  private async hideAndRemoveScreen(screen: AppScreen) {
-    // Prevent interaction in the screen
-    screen.interactiveChildren = false;
-
-    // Hide screen if method is available
-    if (screen.hide) {
-      await screen.hide();
-    }
-
-    // Unlink update function if method is available
-    if (screen.update) {
-      this.app.ticker.remove(screen.update, screen);
-    }
-
-    // Remove screen from its parent (usually app.stage, if not changed)
-    if (screen.parent) {
-      screen.parent.removeChild(screen);
-    }
-
-    // Clean up the screen so that instance can be reused again later
-    if (screen.reset) {
-      screen.reset();
-    }
+  /** 更新登録・DOMイベント・ステージ上の参照を解除する。 */
+  private removeScreen(screen: AppScreen): void {
+    if (screen.update) this.app.ticker.remove(screen.update, screen);
+    screen.parent?.removeChild(screen);
+    screen.reset?.();
+    screen.destroy({ children: true });
   }
 
-  /**
-   * Hide current screen (if there is one) and present a new screen.
-   * Any class that matches AppScreen interface can be used here.
-   */
-  public async showScreen(ctor: AppScreenConstructor) {
-    // Block interactivity in current screen
-    if (this.currentScreen) {
-      this.currentScreen.interactiveChildren = false;
-    }
-
-    // Load assets for the new screen, if available
-    if (ctor.assetBundles) {
-      // Load all assets required by this new screen
-      await Assets.loadBundle(ctor.assetBundles, (progress) => {
-        if (this.currentScreen?.onLoad) {
-          this.currentScreen.onLoad(progress * 100);
-        }
-      });
-    }
-
-    if (this.currentScreen?.onLoad) {
-      this.currentScreen.onLoad(100);
-    }
-
-    // If there is a screen already created, hide and destroy it
-    if (this.currentScreen) {
-      await this.hideAndRemoveScreen(this.currentScreen);
-    }
-
-    // Create the new screen and add that to the stage
-    this.currentScreen = BigPool.get(ctor);
-    await this.addAndShowScreen(this.currentScreen);
+  /** 現在の画面を閉じ、メニューなどDOM側の画面へ戻れる状態にする。 */
+  public clearScreen(): void {
+    if (!this.currentScreen) return;
+    const screen = this.currentScreen;
+    this.currentScreen = undefined;
+    this.removeScreen(screen);
   }
 
-  /**
-   * Resize screens
-   * @param width Viewport width
-   * @param height Viewport height
-   */
-  public resize(width: number, height: number) {
+  /** 現在の画面へリサイズを通知する。 */
+  public resize(width: number, height: number): void {
     this.width = width;
     this.height = height;
     this.currentScreen?.resize?.(width, height);
-    this.currentPopup?.resize?.(width, height);
-    this.background?.resize?.(width, height);
   }
 
-  /**
-   * Show up a popup over current screen
-   */
-  public async presentPopup(ctor: AppScreenConstructor) {
-    if (this.currentScreen) {
-      this.currentScreen.interactiveChildren = false;
-      await this.currentScreen.pause?.();
-    }
-
-    if (this.currentPopup) {
-      await this.hideAndRemoveScreen(this.currentPopup);
-    }
-
-    this.currentPopup = new ctor();
-    await this.addAndShowScreen(this.currentPopup);
-  }
-
-  /**
-   * Dismiss current popup, if there is one
-   */
-  public async dismissPopup() {
-    if (!this.currentPopup) return;
-    const popup = this.currentPopup;
-    this.currentPopup = undefined;
-    await this.hideAndRemoveScreen(popup);
-    if (this.currentScreen) {
-      this.currentScreen.interactiveChildren = true;
-      this.currentScreen.resume?.();
-    }
-  }
-
-  /**
-   * Blur screens when lose focus
-   */
-  public blur() {
+  /** フォーカス喪失を現在の画面へ通知する。 */
+  public blur(): void {
     this.currentScreen?.blur?.();
-    this.currentPopup?.blur?.();
-    this.background?.blur?.();
   }
 
-  /**
-   * Focus screens
-   */
-  public focus() {
+  /** フォーカス復帰を現在の画面へ通知する。 */
+  public focus(): void {
     this.currentScreen?.focus?.();
-    this.currentPopup?.focus?.();
-    this.background?.focus?.();
+  }
+
+  /** エンジン破棄時に画面とTicker登録を後始末する。 */
+  public destroy(): void {
+    this.clearScreen();
+    this.container.destroy({ children: true });
   }
 }

@@ -1,30 +1,194 @@
 <!doctype html>
 <html lang="ja">
-<head>
+  <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="stylesheet" href="/style.css">
-    <title>Frame Fighters - 2D Fighting Game</title>
-</head>
+    <link rel="stylesheet" href="/style.css" />
+    <title>Fighting Game 2D</title>
+  </head>
 
-<body>
-    <div id="app">
-        <div id="pixi-container"></div>
-    </div>
-    <button id="network-open" type="button">ONLINE ROOM</button>
-    <section id="network-panel" aria-label="オンライン対戦ルーム">
-        <button id="network-close" type="button" aria-label="閉じる">×</button>
-        <h1>ONLINE ROOM</h1>
-        <p>同じ合言葉を入力した2人で対戦します。</p>
-        <input id="room-phrase" type="text" minlength="4" maxlength="32" placeholder="合言葉（4〜32文字）" autocomplete="off" />
-        <div class="room-actions">
-            <button id="room-create" type="button">部屋を作成</button>
-            <button id="room-join" type="button">部屋に参加</button>
+  <body>
+    <div id="app"><div id="pixi-container"></div></div>
+
+    <section id="top-menu" class="menu-layer" aria-label="Top画面">
+      <div class="top-card">
+        <h1>FIGHTING GAME 2D</h1>
+        <div class="top-actions">
+          <button id="menu-local" type="button">ローカル対戦</button>
+          <button id="menu-online" type="button">オンライン対戦</button>
+          <button id="menu-training" type="button">トレーニング</button>
         </div>
-        <p id="room-status">ローカル対戦中。オンライン対戦を始めるには合言葉を入力してください。</p>
-        <button id="room-offline" class="room-offline" type="button">切断してローカル対戦へ</button>
+      </div>
+    </section>
+
+    <section
+      id="online-waiting"
+      class="menu-layer is-hidden"
+      aria-label="オンライン待ち受け画面"
+    >
+      <div class="waiting-title">ONLINE MATCHMAKING</div>
+    </section>
+
+    <section
+      id="character-select"
+      class="menu-layer is-hidden"
+      aria-label="キャラクター選択画面"
+    >
+      <div class="selection-card">
+        <button id="character-back" type="button" class="back-button">
+          ← Topへ戻る
+        </button>
+        <h1 id="character-title">キャラクターを選択してください</h1>
+        <p id="character-status"></p>
+        <div id="cpu-level-selector" class="cpu-level-selector is-hidden">
+          <span class="cpu-level-label">CPU LEVEL</span>
+          <div class="cpu-level-buttons" role="group" aria-label="CPUレベル">
+            <button type="button" data-cpu-level="0">0</button>
+            <button type="button" data-cpu-level="1">1</button>
+            <button type="button" data-cpu-level="2">2</button>
+            <button type="button" data-cpu-level="3">3</button>
+          </div>
+        </div>
+        <div id="character-grid"></div>
+        <section
+          id="color-select"
+          class="color-select is-hidden"
+          aria-label="カラー選択"
+        >
+          <h2>COLOR SELECT</h2>
+          <div id="color-options" class="color-options"></div>
+        </section>
+      </div>
+    </section>
+
+    <section
+      id="matchup-screen"
+      class="menu-layer matchup-layer is-hidden"
+      aria-label="対戦組み合わせ"
+    >
+      <div id="matchup-player-1" class="matchup-player matchup-player-1"></div>
+      <div class="matchup-vs" aria-label="バーサス">VS</div>
+      <div id="matchup-player-2" class="matchup-player matchup-player-2"></div>
+    </section>
+
+    <section
+      id="network-panel"
+      class="is-hidden"
+      aria-label="オンライン対戦ルーム"
+    >
+      <button id="network-close" type="button" aria-label="閉じる">×</button>
+      <h1>ONLINE ROOM</h1>
+      <p>同じ合言葉を入力した2人で対戦します。</p>
+      <input
+        id="room-phrase"
+        type="text"
+        minlength="4"
+        maxlength="32"
+        placeholder="合言葉（4〜32文字）"
+        autocomplete="off"
+      />
+      <div class="room-actions">
+        <button id="room-create" type="button">部屋を作成</button>
+        <button id="room-join" type="button">部屋に参加</button>
+      </div>
+      <p id="room-status"></p>
+      <button id="room-offline" class="room-offline" type="button">
+        Topへ戻る
+      </button>
+    </section>
+
+    <section
+      id="match-pause-menu"
+      class="modal-layer is-hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="pause-menu-title"
+      aria-hidden="true"
+    >
+      <div class="pause-menu-card">
+        <div id="pause-menu-main">
+          <p class="pause-menu-kicker">PAUSE MENU</p>
+          <h1 id="pause-menu-title">一時停止中</h1>
+          <div class="pause-menu-actions">
+            <button id="pause-resume" type="button">対戦に戻る</button>
+            <button id="pause-options" type="button">オプション</button>
+            <button id="pause-top" type="button" class="pause-top-button">
+              Top画面へ
+            </button>
+          </div>
+        </div>
+        <div id="pause-menu-options" class="is-hidden">
+          <p class="pause-menu-kicker">OPTIONS</p>
+          <h1>キーコンフィグ</h1>
+          <p id="key-config-status" class="key-config-status" role="status">
+            変更したい操作を選んでください。
+          </p>
+          <div id="key-config-list" class="key-config-list"></div>
+          <p class="key-config-note">
+            Escはキャンセル専用の固定キーです。割り当て変更中に押すと変更を取り消します。
+          </p>
+          <p class="key-config-note">
+            相手と反対方向で立ちガード、下＋反対方向でしゃがみガードです。「向き反転」キー＋左右移動キーで向きを反転します。Xbox操作は左スティック／Dパッド、A／X／Bで固定です。
+          </p>
+          <section
+            id="training-cpu-options"
+            class="training-cpu-options is-hidden"
+          >
+            <h2>TRAINING CPU</h2>
+            <p>トレーニング時のP2の行動を設定します。</p>
+            <div class="training-cpu-settings">
+              <label>
+                ガード種別
+                <select id="training-cpu-guard">
+                  <option value="none">ガードしない</option>
+                  <option value="standing">たちガード</option>
+                  <option value="crouching">しゃがみガード</option>
+                  <option value="random">攻撃ごとにランダムガード</option>
+                </select>
+              </label>
+              <label>
+                ジャンプ
+                <select id="training-cpu-jump">
+                  <option value="always">常にジャンプ</option>
+                  <option value="random">ランダムジャンプ</option>
+                  <option value="never" selected>ジャンプしない</option>
+                </select>
+              </label>
+              <label>
+                移動
+                <select id="training-cpu-move">
+                  <option value="standing" selected>直立</option>
+                  <option value="forward">前移動</option>
+                  <option value="backward">後ろ移動</option>
+                  <option value="random">ランダム移動</option>
+                </select>
+              </label>
+              <label>
+                攻撃
+                <select id="training-cpu-attack">
+                  <option value="none" selected>攻撃しない</option>
+                  <option value="light">弱のみ</option>
+                  <option value="heavy">強のみ</option>
+                  <option value="special">技のみ</option>
+                </select>
+              </label>
+              <label>
+                敵体力自動回復
+                <select id="training-auto-recovery">
+                  <option value="off" selected>OFF</option>
+                  <option value="on">ON</option>
+                </select>
+              </label>
+            </div>
+          </section>
+          <button id="key-config-reset" type="button" class="key-config-reset">
+            初期設定に戻す
+          </button>
+          <button id="pause-options-back" type="button">戻る</button>
+        </div>
+      </div>
     </section>
     <script type="module" src="/src/main.ts"></script>
-</body>
+  </body>
 </html>

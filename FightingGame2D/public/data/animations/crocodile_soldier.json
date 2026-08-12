@@ -1,0 +1,61 @@
+{
+  "format": "fightinggame2d-blender-sprite-v1",
+  "fps": 60,
+  "animations": {},
+  "sprite": {
+    "asset": "data/icons/crocodile-soldier.png",
+    "scale": 0.17,
+    "anchor": [0.5, 0.905],
+    "nameplateY": -220,
+    "frameDuration": 6,
+    "animations": {
+      "idle": [
+        { "y": 0, "rotation": 0 },
+        { "y": -2, "rotation": -0.008 },
+        { "y": -4, "rotation": 0 },
+        { "y": -2, "rotation": 0.008 }
+      ],
+      "walk": [
+        { "x": -3, "y": -1, "rotation": -0.035, "scale": 0.99 },
+        { "x": 1, "y": -5, "rotation": 0.018, "scale": 1.01 },
+        { "x": 4, "y": -1, "rotation": 0.035, "scale": 0.99 },
+        { "x": -1, "y": -5, "rotation": -0.018, "scale": 1.01 }
+      ],
+      "jump": [
+        { "y": 2, "rotation": -0.08, "scale": 0.97 },
+        { "y": -4, "rotation": 0.04, "scale": 1.03 },
+        { "y": -1, "rotation": 0.08, "scale": 0.99 }
+      ],
+      "light": [
+        { "x": -8, "rotation": -0.1, "scale": 0.98 },
+        { "x": 9, "rotation": 0.07, "scale": 1.03 },
+        { "x": 14, "rotation": 0.1, "scale": 1.04 },
+        { "x": 2, "rotation": 0.015 }
+      ],
+      "heavy": [
+        { "x": -14, "rotation": -0.16, "scale": 0.96 },
+        { "x": -5, "rotation": -0.1, "scale": 0.98 },
+        { "x": 18, "rotation": 0.13, "scale": 1.08 },
+        { "x": 5, "rotation": 0.04, "scale": 1.02 }
+      ],
+      "special": [
+        { "x": -16, "rotation": -0.18, "scale": 0.96 },
+        { "x": -8, "rotation": -0.1, "scale": 0.99 },
+        { "x": 21, "rotation": 0.16, "scale": 1.1 },
+        { "x": 10, "rotation": 0.08, "scale": 1.04 }
+      ],
+      "hit": [
+        { "x": -13, "rotation": -0.14, "scale": 0.97 },
+        { "x": -7, "rotation": -0.06, "scale": 0.99 }
+      ],
+      "block": [
+        { "x": -3, "rotation": -0.06, "scale": 0.98 },
+        { "x": -2, "y": -2, "rotation": -0.05, "scale": 0.98 }
+      ],
+      "ko": [
+        { "x": -9, "y": 6, "rotation": 0.58, "scale": 0.97 },
+        { "x": -14, "y": 17, "rotation": 1.12, "scale": 0.95 }
+      ]
+    }
+  }
+}

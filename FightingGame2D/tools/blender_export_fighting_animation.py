@@ -1,13 +1,13 @@
-"""Export Blender armature actions for FightingGame2D's 2D bone renderer.
+"""BlenderのArmature ActionをFightingGame2D用2D骨格JSONへ書き出す。
 
-Run from Blender, for example:
+Blenderからの実行例:
   blender --background Fighter.blend --python tools/blender_export_fighting_animation.py -- \
     --armature Armature --output public/data/animations/my_fighter.json
 
-The game uses Blender's world X axis as horizontal and world Z as vertical.  Create
-actions named idle, walk, jump, light, heavy, special, hit, block, and ko (or adjust
-the move CSV to reference the action name).  A browser cannot play a .blend directly;
-this script writes the deterministic, frame-sampled runtime representation instead.
+ゲームではBlenderワールドのX軸を横方向、Z軸を縦方向として扱う。Action名は
+idle、walk、jump、light、heavy、special、hit、block、koを推奨する（別名の場合は
+moves.csvのanimation列を合わせる）。ブラウザは.blendを直接再生できないため、
+このスクリプトで決定論的なフレームサンプル済み実行用データに変換する。
 """
 
 import argparse
@@ -19,6 +19,7 @@ import bpy
 
 
 def parse_arguments():
+    """Blenderの`--`以降で渡されたArmature名と出力先を読む。"""
     arguments = sys.argv
     arguments = arguments[arguments.index("--") + 1 :] if "--" in arguments else []
     parser = argparse.ArgumentParser()
@@ -29,11 +30,12 @@ def parse_arguments():
 
 
 def point(vector, root):
-    """Convert Blender world units to local screen pixels (Y points down in Canvas)."""
+    """Blenderのワールド座標を、下方向が正のローカル画面ピクセルへ変換する。"""
     return [round((vector.x - root.x) * 100, 3), round(-(vector.z - root.z) * 100, 3)]
 
 
 def action_frames(scene, armature, action, line_width):
+    """1つのActionをフレームごとの骨線分配列としてサンプリングする。"""
     if armature.animation_data is None:
         armature.animation_data_create()
     armature.animation_data.action = action
@@ -59,6 +61,7 @@ def action_frames(scene, armature, action, line_width):
 
 
 def main():
+    """全ActionをJSONへまとめ、ブラウザ側の骨格アニメーション再生用に保存する。"""
     options = parse_arguments()
     scene = bpy.context.scene
     armature = bpy.data.objects.get(options.armature)

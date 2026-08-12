@@ -8,36 +8,25 @@ import type {
 
 import { resize } from "./resize";
 
-// Custom utility type:
+// ネストした設定項目も必須扱いにするユーティリティ型。
 export type DeepRequired<T> = Required<{
   [K in keyof T]: DeepRequired<T[K]>;
 }>;
 
-/**
- * Application options for the CreationResizePlugin.
- */
+/** 独自リサイズ拡張で使用するアプリケーション設定。 */
 export interface CreationResizePluginOptions extends ResizePluginOptions {
-  /** Options for controlling the resizing of the application */
+  /** Canvasリサイズを制御する設定。 */
   resizeOptions?: {
-    /** Minimum width of the application */
+    /** 描画領域の最小幅。 */
     minWidth?: number;
-    /** Minimum height of the application */
+    /** 描画領域の最小高さ。 */
     minHeight?: number;
-    /** Whether to letterbox the application when resizing */
+    /** アスペクト比維持時にレターボックスを付けるか。 */
     letterbox?: boolean;
   };
 }
 
-/**
- * Middleware for Application's resize functionality.
- *
- * Adds the following methods to Application:
- * * Application#resizeTo
- * * Application#resize
- * * Application#queueResize
- * * Application#cancelResize
- * * Application#resizeOptions
- */
+/** PixiJSのリサイズ処理をゲーム画面向けに拡張する。 */
 export class CreationResizePlugin {
   /** @ignore */
   public static extension: ExtensionMetadata = ExtensionType.Application;
@@ -46,23 +35,19 @@ export class CreationResizePlugin {
   private static _resizeTo: Window | HTMLElement | null;
   private static _cancelResize: (() => void) | null;
 
-  /**
-   * Initialize the plugin with scope of application instance
-   * @param {object} [options] - See application options
-   */
+  /** Canvasと論理解像度のリサイズ処理を初期化する。 */
   public static init(options: ApplicationOptions): void {
     const app = this as unknown as Application;
 
     Object.defineProperty(
       app,
       "resizeTo",
-      /**
-       * The HTML element or window to automatically resize the
-       * renderer's view element to match width and height.
-       */
+      /** 監視対象のサイズへCanvasを自動追従させる。 */
       {
         set(dom: Window | HTMLElement) {
           globalThis.removeEventListener("resize", app.queueResize);
+          // PixiJSがinitをアプリ本体のコンテキストで呼ぶため、
+          // 監視対象は拡張クラスではなくアプリ本体へ保持する。
           this._resizeTo = dom;
           if (dom) {
             globalThis.addEventListener("resize", app.queueResize);
@@ -75,10 +60,7 @@ export class CreationResizePlugin {
       },
     );
 
-    /**
-     * Resize is throttled, so it's safe to call this multiple times per frame and it'll
-     * only be called once.
-     */
+    /** 連続したリサイズ要求を1フレームにまとめる。 */
     app.queueResize = (): void => {
       if (!this._resizeTo) {
         return;
@@ -86,32 +68,28 @@ export class CreationResizePlugin {
 
       this._cancelResize!();
 
-      // Throttle resize events per raf
+      // requestAnimationFrame単位でリサイズ回数を抑制する。
       this._resizeId = requestAnimationFrame(() => app.resize!());
     };
 
-    /**
-     * Execute an immediate resize on the renderer, this is not
-     * throttled and can be expensive to call many times in a row.
-     * Will resize only if `resizeTo` property is set.
-     */
+    /** 監視対象のサイズを直ちにCanvasと論理解像度へ反映する。 */
     app.resize = (): void => {
       if (!this._resizeTo) {
         return;
       }
 
-      // clear queue resize
+      // 予約済みのリサイズを取り消して二重実行を防ぐ。
       this._cancelResize!();
 
       let canvasWidth: number;
       let canvasHeight: number;
 
-      // Resize to the window
+      // Windowを監視している場合はビューポートサイズを使う。
       if (this._resizeTo === globalThis.window) {
         canvasWidth = globalThis.innerWidth;
         canvasHeight = globalThis.innerHeight;
       }
-      // Resize to other HTML entities
+      // 要素を監視している場合はそのクライアントサイズを使う。
       else {
         const { clientWidth, clientHeight } = this._resizeTo as HTMLElement;
 
@@ -152,9 +130,7 @@ export class CreationResizePlugin {
       options.resizeTo || (null as unknown as Window | HTMLElement);
   }
 
-  /**
-   * Clean up the ticker, scoped to application
-   */
+  /** リサイズ監視と予約済みコールバックを解除する。 */
   public static destroy(): void {
     const app = this as unknown as Application;
 
