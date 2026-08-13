@@ -10,15 +10,9 @@ import type {
 /**
  * ファイター表示クラス
  *
-<<<<<<< HEAD
  * ・CSVで指定したキャラクターカラー
  * ・共通のスティックファイター表示
  * を描画するクラス
-=======
- * ・Blenderで作成したアニメーション表示
- * ・簡易スティックファイター表示
- * のどちらにも対応する描画クラス
->>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
  */
 export class FighterView extends Container {
   /** 地面に表示する影 */
@@ -30,11 +24,7 @@ export class FighterView extends Container {
   /** キャラクター名表示 */
   private readonly nameplate: Text;
 
-<<<<<<< HEAD
   /** Blender書き出しJSON。スプライト形式がない場合は棒人間描画を使う。 */
-=======
-  /** Blenderアニメーションデータ（存在する場合のみ） */
->>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
   private readonly animation?: BlenderAnimationData;
 
   /** Blenderアニメーションに連動して動かすキャラクタースプライト。 */
@@ -73,7 +63,6 @@ export class FighterView extends Container {
       anchor: 0.5,
     });
 
-<<<<<<< HEAD
     // Blenderスプライトは先に生成し、読み込み済みテクスチャを描画に使う。
     const spriteDefinition = animation?.sprite;
     if (spriteDefinition) {
@@ -95,22 +84,12 @@ export class FighterView extends Container {
     });
     // 背の高いスプライトは、頭部や相手の名前と重ならない高さへ個別に調整する。
     this.nameplate.position.set(0, spriteDefinition?.nameplateY ?? -184);
-=======
-    // 描画順
-    // 影 → 本体 → 名前
-    this.addChild(
-      this.shadow,
-      this.body,
-      this.nameplate,
-    );
->>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
   }
 
   //====================================================
   // 毎フレーム更新
   //====================================================
   public update(): void {
-<<<<<<< HEAD
     // キャラクター位置更新
     const x = this.fighter.x / POSITION_SCALE;
     const y = this.fighter.y / POSITION_SCALE;
@@ -124,31 +103,10 @@ export class FighterView extends Container {
     if (visualKey === this.lastVisualKey) return;
     this.lastVisualKey = visualKey;
 
-=======
-
-    // キャラクター位置更新
-    this.position.set(
-      this.fighter.x / POSITION_SCALE,
-      this.fighter.y / POSITION_SCALE,
-    );
-
-    //====================================================
-    // 地面の影を描画
-    //====================================================
-    this.shadow
-      .clear()
-      .ellipse(0, 2, 52, 10)
-      .fill({
-        color: 0x050711,
-        alpha: 0.45,
-      });
-
->>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
     //====================================================
     // 本体描画
     //====================================================
     this.body.clear();
-<<<<<<< HEAD
     const spriteDefinition = this.animation?.sprite;
     if (this.animatedSprite && spriteDefinition) {
       // Blender JSONのポーズ値で、透過PNGスプライトをアニメーションする。
@@ -161,17 +119,6 @@ export class FighterView extends Container {
     } else {
       // しゃがみガードは、足元基準で低く表示する。
       this.body.scale.set(1, this.fighter.action === "crouchBlock" ? 0.72 : 1);
-=======
-
-    // Blenderモデルが存在する場合はBlender描画
-    if (
-      this.fighter.character.renderType === "blender" &&
-      this.animation
-    ) {
-      this.drawBlenderPose();
-    } else {
-      // 無い場合はスティックマン描画
->>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
       this.drawStickFigure();
     }
 
@@ -179,7 +126,6 @@ export class FighterView extends Container {
     // スタン状態のエフェクト表示
     //====================================================
     if (this.fighter.stun > 0) {
-<<<<<<< HEAD
       this.body.circle(0, -150, 7).fill({ color: 0xfff06a });
 
       this.body.circle(18, -140, 5).fill({ color: 0xfff06a });
@@ -245,55 +191,14 @@ export class FighterView extends Container {
   /** 従来のBlenderボーン線分JSONを、Pixiの線分・関節として描画する。 */
   private drawBlenderPose(): void {
     const pose = this.sampleBlenderPose();
-=======
-      this.body
-        .circle(0, -150, 7)
-        .fill({ color: 0xfff06a });
-
-      this.body
-        .circle(18, -140, 5)
-        .fill({ color: 0xfff06a });
-    }
-
-    //====================================================
-    // 名前位置更新
-    //====================================================
-    this.nameplate.position.set(0, -184);
-  }
-
-  //====================================================
-  // Blenderアニメーション描画
-  //====================================================
-  private drawBlenderPose(): void {
-
-    // 現在フレームのポーズ取得
-    const pose = this.samplePose();
-
-    const mirror = this.fighter.facing;
-
-    // ポーズが取得できなければ簡易描画へ
->>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
     if (!pose) {
       this.drawStickFigure();
       return;
     }
 
-<<<<<<< HEAD
     const mirror = this.fighter.facing;
-=======
-    //====================================================
-    // ボーンを線として描画
-    //====================================================
->>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
     for (const segment of pose.segments) {
-
-      const [
-        x1 = 0,
-        y1 = 0,
-        x2 = 0,
-        y2 = 0,
-        width = 8,
-      ] = segment;
+      const [x1 = 0, y1 = 0, x2 = 0, y2 = 0, width = 8] = segment;
 
       this.body
         .moveTo(x1 * mirror, y1)
@@ -305,24 +210,12 @@ export class FighterView extends Container {
         });
 
       // 関節描画
-      this.body
-        .circle(
-          x2 * mirror,
-          y2,
-          Math.max(3, width * 0.42),
-        )
-        .fill({
-          color: this.fighter.character.accentColor,
-        });
+      this.body.circle(x2 * mirror, y2, Math.max(3, width * 0.42)).fill({
+        color: this.fighter.character.accentColor,
+      });
     }
 
-<<<<<<< HEAD
     // 骨格データに頭部がない場合でも、キャラクターの向きが分かる頭を重ねる。
-=======
-    //====================================================
-    // 頭部描画
-    //====================================================
->>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
     this.body
       .circle(0, -122, 16)
       .fill({
@@ -334,7 +227,6 @@ export class FighterView extends Container {
       });
   }
 
-<<<<<<< HEAD
   /** 現在のゲームアクションに対応するBlenderボーンフレームを取得する。 */
   private sampleBlenderPose() {
     const frames = this.blenderFramesForCurrentAction();
@@ -364,47 +256,10 @@ export class FighterView extends Container {
     return animations[action] ?? animations.idle;
   }
 
-=======
-  //====================================================
-  // 現在表示するアニメーションフレーム取得
-  //====================================================
-  private samplePose() {
-
-    const animations = this.animation?.animations;
-
-    if (!animations) return undefined;
-
-    // 現在アクションのアニメーション取得
-    const frames =
-      animations[this.fighter.action] ??
-      animations.idle;
-
-    if (!frames?.length) return undefined;
-
-    // 60FPS基準からBlenderFPSへ変換
-    const animationFrame = Math.floor(
-      (this.fighter.actionFrame * this.animation!.fps) / 60,
-    );
-
-    //====================================================
-    // ループアニメーションと単発アニメーションを切り替え
-    //====================================================
-    const index =
-      this.fighter.action === "idle" ||
-      this.fighter.action === "walk" ||
-      this.fighter.action === "block"
-        ? animationFrame % frames.length
-        : Math.min(animationFrame, frames.length - 1);
-
-    return frames[index];
-  }
-
->>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
   //====================================================
   // 簡易スティックファイター描画
   //====================================================
   private drawStickFigure(): void {
-
     const mirror = this.fighter.facing;
 
     // 歩行時の足振り
@@ -424,11 +279,7 @@ export class FighterView extends Container {
 
     // ガード時は少し前傾
     const lean =
-<<<<<<< HEAD
       this.fighter.action === "block" || this.fighter.action === "crouchBlock"
-=======
-      this.fighter.action === "block"
->>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
         ? -10
         : 0;
 
@@ -448,14 +299,7 @@ export class FighterView extends Container {
       })
 
       .moveTo(lean * mirror, -72)
-<<<<<<< HEAD
       .lineTo((lean + armReach) * mirror, attacking ? -72 : -48)
-=======
-      .lineTo(
-        (lean + armReach) * mirror,
-        attacking ? -72 : -48,
-      )
->>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
       .stroke({
         color: accent,
         width: 8,
@@ -498,19 +342,10 @@ export class FighterView extends Container {
     // 必殺技エフェクト
     //====================================================
     if (this.fighter.action === "special") {
-<<<<<<< HEAD
       this.body.circle(74 * mirror, -70, 18).fill({
         color: accent,
         alpha: 0.78,
       });
-=======
-      this.body
-        .circle(74 * mirror, -70, 18)
-        .fill({
-          color: accent,
-          alpha: 0.78,
-        });
->>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
     }
 
     //====================================================
@@ -522,14 +357,4 @@ export class FighterView extends Container {
       this.body.rotation = 0;
     }
   }
-<<<<<<< HEAD
-=======
-
-  //====================================================
-  // 地面Y座標取得
-  //====================================================
-  public get groundY(): number {
-    return GROUND_Y;
-  }
->>>>>>> 1e49edfbceaf77a62719f3201835a46a31c1131c
 }
