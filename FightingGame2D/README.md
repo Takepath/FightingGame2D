@@ -8,6 +8,8 @@ Google Chromeで動く、CPU対戦・トレーニング・オンライン対戦�
 
 合言葉による2人用通信は [modules/passphrase-room](modules/passphrase-room) に分離しています。別プロジェクトでは、このフォルダの `client.ts` と `server.mjs` を利用できます。詳細と最小実装例は [モジュールのREADME](modules/passphrase-room/README.md) を参照してください。
 
+連番PNGを準備してキャラクター・アニメーション・技・コマンドを追加する手順は、外部公開用の[連番PNGキャラクター追加ガイド](docs/character-png-animation-guide-ja.md)を参照してください。
+
 ## 起動
 
 ```powershell
