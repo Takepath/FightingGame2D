@@ -38,8 +38,8 @@ export const FIGHTING_GAME_CONFIG: FightingGameConfig = {
   onlineRoom: {
     minPassphraseLength: 4,
     maxPassphraseLength: 32,
-    // 別ホストを使う場合は "ws://192.168.1.10:8787" のように指定する。
-    endpoint: undefined,
+    // 同一オリジンのViteプロキシを経由して、画面公開とルーム通信を1本のngrok URLへ集約する。
+    endpoint: `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/room`,
   },
   characterSelect: {
     maxCharacters: 25,
