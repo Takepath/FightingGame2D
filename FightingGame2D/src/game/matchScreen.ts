@@ -28,13 +28,16 @@ import {
   type TrainingJumpMode,
   type TrainingMoveMode,
 } from "./trainingCpu";
-import type { CharacterDefinition, GameData } from "./types";
+import { InputButton, type CharacterDefinition, type GameData } from "./types";
 
 // 60FPS固定シミュレーション用の更新間隔
 const FIXED_STEP_MS = 1000 / 60;
 
 // 1フレーム描画中に実行できるシミュレーション更新の最大回数
 const MAX_STEPS_PER_RENDER = 5;
+
+/** トレーニング画面の左端へ表示する、最新入力から遡る履歴の最大件数。 */
+const MAX_TRAINING_INPUT_HISTORY = 8;
 
 /**
  * 対戦画面クラス
@@ -68,6 +71,9 @@ export class MatchScreen extends Container {
 
   /** HUD(体力バーなど) */
   private readonly hudArt = new Graphics();
+
+  /** トレーニング入力履歴の背景パネル。 */
+  private readonly trainingInputHistoryArt = new Graphics();
 
   /** 入力管理 */
   private readonly input = new InputManager();
@@ -137,6 +143,11 @@ export class MatchScreen extends Container {
     "training-auto-recovery",
   )! as HTMLSelectElement;
 
+  /** トレーニング中のP1入力履歴を表示するかを切り替える選択欄。 */
+  private readonly trainingInputHistorySelect = document.getElementById(
+    "training-input-history",
+  )! as HTMLSelectElement;
+
   /** キー入力を待機している操作。nullなら通常のオプション表示中。 */
   private keyBindingTarget:
     | (KeyBindingTarget & { readonly button: HTMLButtonElement })
@@ -174,6 +185,18 @@ export class MatchScreen extends Container {
 
   /** KO表示 */
   private readonly koText: Text;
+
+  /** トレーニング中のP1入力履歴を縦並びで描画するText。 */
+  private readonly trainingInputHistoryText: Text;
+
+  /** 入力履歴表示のオン・オフ状態。トレーニング以外では常にオフ。 */
+  private trainingInputHistoryEnabled = false;
+
+  /** 最新入力を先頭に保持する、表示専用の入力履歴。 */
+  private readonly trainingInputHistory: number[] = [];
+
+  /** 同じ入力を押し続けた場合に履歴を増やさないための直前入力。 */
+  private previousTrainingInputButtons = 0;
 
   /** 前回HUDへ描画した体力。変化時だけGraphicsを描き直す。 */
   private readonly displayedHealth: [number, number] = [-1, -1];
@@ -257,12 +280,25 @@ export class MatchScreen extends Container {
     this.info = this.createText("", 14, "#a9c7ed");
     this.roundText = this.createText("ROUND 1 / 3", 15, "#ffffff");
     this.koText = this.createText("", 64, "#fff1a3");
+    this.trainingInputHistoryText = new Text({
+      text: "",
+      style: {
+        fontFamily: "Arial, sans-serif",
+        fontSize: 25,
+        fontWeight: "800",
+        fill: "#ecf8ff",
+        stroke: { color: "#070b16", width: 5 },
+        lineHeight: 31,
+      },
+    });
     this.roundText.position.set(STAGE_WIDTH / 2, 18);
     // トレーニングはラウンド制を使わないため、ラウンド数のHUDを隠す。
     this.roundText.visible = !this.training;
     this.title.position.set(STAGE_WIDTH / 2, 55);
     this.info.position.set(STAGE_WIDTH / 2, 677);
     this.koText.position.set(STAGE_WIDTH / 2, 265);
+    this.trainingInputHistoryText.position.set(34, 128);
+    this.trainingInputHistoryText.visible = false;
 
     // 描画順に追加
     this.world.addChild(
@@ -271,9 +307,16 @@ export class MatchScreen extends Container {
       this.fighterViews[0],
       this.fighterViews[1],
       this.hudArt,
+      this.trainingInputHistoryArt,
     );
 
-    this.world.addChild(this.title, this.info, this.roundText, this.koText);
+    this.world.addChild(
+      this.title,
+      this.info,
+      this.roundText,
+      this.koText,
+      this.trainingInputHistoryText,
+    );
 
     this.addChild(this.world);
 
@@ -308,6 +351,10 @@ export class MatchScreen extends Container {
       this.updateTrainingCpuSettings,
     );
     this.trainingAutoRecoverySelect.addEventListener(
+      "change",
+      this.updateTrainingCpuSettings,
+    );
+    this.trainingInputHistorySelect.addEventListener(
       "change",
       this.updateTrainingCpuSettings,
     );
@@ -391,6 +438,9 @@ export class MatchScreen extends Container {
         break;
       }
 
+      // 入力履歴は見た目だけに使い、決定論的シミュレーションへは影響させない。
+      this.recordTrainingInputHistory(inputs[0].buttons);
+
       // シミュレーション1フレーム進める
       this.synchronizer.advance(this.simulation, inputs);
 
@@ -454,6 +504,10 @@ export class MatchScreen extends Container {
       this.updateTrainingCpuSettings,
     );
     this.trainingAutoRecoverySelect.removeEventListener(
+      "change",
+      this.updateTrainingCpuSettings,
+    );
+    this.trainingInputHistorySelect.removeEventListener(
       "change",
       this.updateTrainingCpuSettings,
     );
@@ -647,9 +701,90 @@ export class MatchScreen extends Container {
     this.simulation.setTrainingAutoRecovery(
       this.trainingAutoRecoverySelect.value === "on",
     );
+    this.setTrainingInputHistoryEnabled(
+      this.trainingInputHistorySelect.value === "on",
+    );
   };
 
   /** モーダルが開いているかを返す。 */
+  /** トレーニング入力履歴を有効・無効化し、切替時は古い表示を消去する。 */
+  private setTrainingInputHistoryEnabled(enabled: boolean): void {
+    const nextEnabled = this.training && enabled;
+    if (this.trainingInputHistoryEnabled === nextEnabled) return;
+
+    this.trainingInputHistoryEnabled = nextEnabled;
+    this.trainingInputHistory.length = 0;
+    this.previousTrainingInputButtons = 0;
+    this.trainingInputHistoryArt.clear();
+    this.trainingInputHistoryText.text = "";
+    this.trainingInputHistoryText.visible = nextEnabled;
+  }
+
+  /** P1の入力変化だけを、最新順のトレーニング入力履歴へ記録する。 */
+  private recordTrainingInputHistory(buttons: number): void {
+    if (!this.trainingInputHistoryEnabled) return;
+
+    const trackedButtons =
+      buttons &
+      (InputButton.Left |
+        InputButton.Right |
+        InputButton.Up |
+        InputButton.Down |
+        InputButton.Light |
+        InputButton.Heavy |
+        InputButton.Special);
+    if (trackedButtons === this.previousTrainingInputButtons) return;
+
+    this.previousTrainingInputButtons = trackedButtons;
+    // ニュートラルへの復帰は表示せず、次の同一入力を再度記録できるようにする。
+    if (trackedButtons === 0) return;
+
+    this.trainingInputHistory.unshift(trackedButtons);
+    if (this.trainingInputHistory.length > MAX_TRAINING_INPUT_HISTORY) {
+      this.trainingInputHistory.pop();
+    }
+    this.renderTrainingInputHistory();
+  }
+
+  /** 入力履歴を矢印・攻撃名へ変換して、画面左端の縦並びへ描画する。 */
+  private renderTrainingInputHistory(): void {
+    const lines = this.trainingInputHistory.map((buttons) =>
+      this.formatTrainingInput(buttons),
+    );
+    this.setTextIfChanged(this.trainingInputHistoryText, lines.join("\n"));
+
+    const panelHeight = Math.max(44, lines.length * 31 + 18);
+    this.trainingInputHistoryArt.clear();
+    this.trainingInputHistoryArt
+      .roundRect(18, 116, 112, panelHeight, 8)
+      .fill({ color: 0x071425, alpha: 0.8 })
+      .stroke({ color: 0x4fc3dd, width: 1, alpha: 0.75 });
+  }
+
+  /** 入力ビットを、トレーニング表示用の方向記号と攻撃名へ整形する。 */
+  private formatTrainingInput(buttons: number): string {
+    const hasLeft = (buttons & InputButton.Left) !== 0;
+    const hasRight = (buttons & InputButton.Right) !== 0;
+    const hasUp = (buttons & InputButton.Up) !== 0;
+    const hasDown = (buttons & InputButton.Down) !== 0;
+
+    let direction = "";
+    if (hasUp && hasLeft) direction = "↖";
+    else if (hasUp && hasRight) direction = "↗";
+    else if (hasDown && hasLeft) direction = "↙";
+    else if (hasDown && hasRight) direction = "↘";
+    else if (hasUp) direction = "↑";
+    else if (hasDown) direction = "↓";
+    else if (hasLeft) direction = "←";
+    else if (hasRight) direction = "→";
+
+    const actions: string[] = [];
+    if ((buttons & InputButton.Special) !== 0) actions.push("必");
+    if ((buttons & InputButton.Heavy) !== 0) actions.push("強");
+    if ((buttons & InputButton.Light) !== 0) actions.push("弱");
+    return [direction, ...actions].filter(Boolean).join(" ");
+  }
+
   private isPauseMenuOpen(): boolean {
     return !this.pauseMenu.classList.contains("is-hidden");
   }
