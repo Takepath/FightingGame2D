@@ -2,6 +2,7 @@ character_id,move_id,button,startup,active,recovery,damage,range_x,range_y,self_
 crocodile_soldier,light,light,5,3,13,2,68,58,0,0,280,0,5,light,melee,0,0,ground,mid,,
 crocodile_soldier,heavy,heavy,11,5,20,5,96,70,0,0,560,520,5,heavy,melee,0,0,ground,high,,
 crocodile_soldier,special,special,13,7,25,15,108,46,0,0,720,260,5,special,melee,0,0,ground,low,,
+crocodile_soldier,special,special,13,7,25,15,0,0,0,0,720,260,30,special,projectile,0,0,ground,mid,takenoko,hadoken
 all,light,light,4,3,13,2,60,54,0,0,250,0,5,light,melee,0,0,ground,mid,,
 all,heavy,heavy,10,4,18,5,80,64,0,0,490,480,5,heavy,melee,0,0,ground,high,,
 all,special,special,18,6,25,15,80,76,0,0,690,720,5,special,melee,0,0,ground,low,,
