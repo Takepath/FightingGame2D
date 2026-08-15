@@ -757,9 +757,7 @@ export class MatchSimulation implements DeterministicSimulation {
     if (direction === "4") return back && !forward && !up && !down;
     if (direction === "9") return up && forward && !back && !down;
     if (direction === "7") return up && back && !forward && !down;
-    if (direction === "3") {
-      return down && forward && !back && !up;
-    }
+    if (direction === "3") return down && forward && !back && !up;
     return down && back && !forward && !up;
   }
 
@@ -782,9 +780,7 @@ export class MatchSimulation implements DeterministicSimulation {
       defender.stun > 0 ||
       defender.guardStun > 0 ||
       defender.activeMoveId !== null
-    ) {
-      return null;
-    }
+    ) {return null}
 
     // 手動反転中でも「敵と反対方向」を後ろ入力として扱う。
     const awayButton =

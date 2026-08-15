@@ -12,6 +12,7 @@
     "multiplayer": "node scripts/start-multiplayer.mjs"
   },
   "dependencies": {
+    "fireworks-js": "^2.10.8",
     "pixi.js": "^8.8.1"
   },
   "devDependencies": {

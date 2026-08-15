@@ -1,5 +1,6 @@
 import type { Ticker } from "pixi.js";
 import { Container, Graphics, Text } from "pixi.js";
+import { Fireworks } from "fireworks-js";
 import { CpuController, type CpuLevel } from "./cpu";
 import { FrameSynchronizer } from "./frameSynchronizer";
 import { FighterView } from "./fighterView";
@@ -38,6 +39,9 @@ const MAX_STEPS_PER_RENDER = 5;
 
 /** トレーニング画面の左端へ表示する、最新入力から遡る履歴の最大件数。 */
 const MAX_TRAINING_INPUT_HISTORY = 8;
+
+/** ラウンド決着時に打ち上げる花火の本数。 */
+const ROUND_RESULT_FIREWORKS = 3;
 
 /**
  * 対戦画面クラス
@@ -216,6 +220,12 @@ export class MatchScreen extends Container {
   /** 自分のプレイヤー番号 */
   private onlinePlayer: 0 | 1 | null = null;
 
+  /** 通常対戦のラウンド決着時に使う、fireworks-jsの花火演出。 */
+  private readonly roundResultFireworks: Fireworks | null;
+
+  /** 同じラウンドの決着で花火を重複発射しないための状態。 */
+  private fireworksLaunchedForRound = false;
+
   /**
    * ゲームデータを設定
    */
@@ -251,6 +261,19 @@ export class MatchScreen extends Container {
 
     this.training = MatchScreen.training;
     this.cpuLevel = MatchScreen.cpuLevel;
+    // トレーニングではラウンド勝敗がないため、花火インスタンスを生成しない。
+    this.roundResultFireworks = this.training
+      ? null
+      : new Fireworks(document.getElementById("fireworks-layer")!, {
+          autoresize: true,
+          mouse: { click: false, move: false, max: 1 },
+          sound: { enabled: false },
+          particles: 42,
+          explosion: 5,
+          intensity: 0,
+          traceSpeed: 9,
+          hue: { min: 15, max: 340 },
+        });
 
     // シミュレーション生成
     this.simulation = new MatchSimulation(
@@ -482,6 +505,8 @@ export class MatchScreen extends Container {
 
   /** 終了処理 */
   public reset(): void {
+    // 画面遷移時は残っている花火Canvasも停止・破棄する。
+    this.roundResultFireworks?.stop(true);
     window.removeEventListener("keydown", this.onKeyDown);
     this.resumeButton.removeEventListener("click", this.resumeMatch);
     this.optionsButton.removeEventListener("click", this.showOptions);
@@ -935,6 +960,7 @@ export class MatchScreen extends Container {
     this.fighterViews[1].update();
     this.drawProjectiles();
     this.drawHud();
+    this.playRoundResultFireworks();
     if (!this.training) {
       this.setTextIfChanged(
         this.roundText,
@@ -975,6 +1001,21 @@ export class MatchScreen extends Container {
   }
 
   /** Textの内容が変化した時だけ更新し、文字テクスチャの再生成を避ける。 */
+  /** ラウンド勝者が確定した瞬間だけ、3発の花火を打ち上げる。 */
+  private playRoundResultFireworks(): void {
+    if (this.training || !this.roundResultFireworks) return;
+
+    if (this.simulation.winner === null) {
+      this.fireworksLaunchedForRound = false;
+      return;
+    }
+    if (this.fireworksLaunchedForRound) return;
+
+    // 花火は演出専用であり、対戦の決定論的なゲーム状態には影響しない。
+    this.fireworksLaunchedForRound = true;
+    this.roundResultFireworks.launch(ROUND_RESULT_FIREWORKS);
+  }
+
   private setTextIfChanged(target: Text, value: string): void {
     if (target.text !== value) target.text = value;
   }
