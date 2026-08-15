@@ -40,8 +40,15 @@ const MAX_STEPS_PER_RENDER = 5;
 /** トレーニング画面の左端へ表示する、最新入力から遡る履歴の最大件数。 */
 const MAX_TRAINING_INPUT_HISTORY = 8;
 
-/** ラウンド決着時に打ち上げる花火の本数。 */
-const ROUND_RESULT_FIREWORKS = 3;
+/** 試合勝者の決定時に打ち上げる花火の本数。 */
+const MATCH_RESULT_FIREWORKS = 3;
+
+/** 写真のような多色の大輪に見せるため、各打上げへ重ねる色の層。 */
+const MATCH_RESULT_FIREWORK_HUES = [
+  { min: 320, max: 350 },
+  { min: 270, max: 300 },
+  { min: 25, max: 48 },
+] as const;
 
 /**
  * 対戦画面クラス
@@ -220,11 +227,14 @@ export class MatchScreen extends Container {
   /** 自分のプレイヤー番号 */
   private onlinePlayer: 0 | 1 | null = null;
 
-  /** 通常対戦のラウンド決着時に使う、fireworks-jsの花火演出。 */
-  private readonly roundResultFireworks: Fireworks | null;
+  /** 花火用Canvasを重ねる、操作を受け付けない画面全体のレイヤー。 */
+  private readonly fireworksLayer = document.getElementById("fireworks-layer")!;
 
-  /** 同じラウンドの決着で花火を重複発射しないための状態。 */
-  private fireworksLaunchedForRound = false;
+  /** 3本の発射位置と多色の層を個別に制御する、fireworks-jsの花火演出。 */
+  private readonly matchResultFireworks: readonly (readonly Fireworks[])[];
+
+  /** 同じ試合決着で花火を重複発射しないための状態。 */
+  private fireworksLaunchedForMatch = false;
 
   /**
    * ゲームデータを設定
@@ -261,19 +271,37 @@ export class MatchScreen extends Container {
 
     this.training = MatchScreen.training;
     this.cpuLevel = MatchScreen.cpuLevel;
-    // トレーニングではラウンド勝敗がないため、花火インスタンスを生成しない。
-    this.roundResultFireworks = this.training
-      ? null
-      : new Fireworks(document.getElementById("fireworks-layer")!, {
-          autoresize: true,
-          mouse: { click: false, move: false, max: 1 },
-          sound: { enabled: false },
-          particles: 42,
-          explosion: 5,
-          intensity: 0,
-          traceSpeed: 9,
-          hue: { min: 15, max: 340 },
-        });
+    // トレーニングでは試合勝敗がないため、花火インスタンスを生成しない。
+    this.matchResultFireworks = this.training
+      ? []
+      : Array.from({ length: MATCH_RESULT_FIREWORKS }, () =>
+          MATCH_RESULT_FIREWORK_HUES.map(
+            (hue) =>
+              new Fireworks(this.fireworksLayer, {
+                autoresize: true,
+                mouse: { click: false, move: false, max: 1 },
+                sound: { enabled: false },
+                // 色層を重ねて、写真のようなピンク・紫・金の大輪を作る。
+                hue,
+                particles: 72,
+                explosion: 11,
+                brightness: { min: 66, max: 100 },
+                decay: { min: 0.008, max: 0.015 },
+                friction: 0.98,
+                gravity: 1,
+                flickering: 72,
+                opacity: 0.24,
+                traceLength: 9,
+                traceSpeed: 12,
+                lineWidth: {
+                  trace: { min: 2, max: 3 },
+                  explosion: { min: 1, max: 2 },
+                },
+                // launch(1)だけで発射し、自動発射を混在させない。
+                intensity: 0,
+              }),
+          ),
+        );
 
     // シミュレーション生成
     this.simulation = new MatchSimulation(
@@ -506,7 +534,9 @@ export class MatchScreen extends Container {
   /** 終了処理 */
   public reset(): void {
     // 画面遷移時は残っている花火Canvasも停止・破棄する。
-    this.roundResultFireworks?.stop(true);
+    this.matchResultFireworks.forEach((fireworksAtPoint) => {
+      fireworksAtPoint.forEach((fireworks) => fireworks.stop(true));
+    });
     window.removeEventListener("keydown", this.onKeyDown);
     this.resumeButton.removeEventListener("click", this.resumeMatch);
     this.optionsButton.removeEventListener("click", this.showOptions);
@@ -960,7 +990,7 @@ export class MatchScreen extends Container {
     this.fighterViews[1].update();
     this.drawProjectiles();
     this.drawHud();
-    this.playRoundResultFireworks();
+    this.playMatchResultFireworks();
     if (!this.training) {
       this.setTextIfChanged(
         this.roundText,
@@ -1000,21 +1030,46 @@ export class MatchScreen extends Container {
     );
   }
 
-  /** Textの内容が変化した時だけ更新し、文字テクスチャの再生成を避ける。 */
-  /** ラウンド勝者が確定した瞬間だけ、3発の花火を打ち上げる。 */
-  private playRoundResultFireworks(): void {
-    if (this.training || !this.roundResultFireworks) return;
+  /** 2本先取で試合勝者が決定した瞬間だけ、下から中央へ3発の花火を打ち上げる。 */
+  private playMatchResultFireworks(): void {
+    if (this.training || this.matchResultFireworks.length === 0) return;
 
-    if (this.simulation.winner === null) {
-      this.fireworksLaunchedForRound = false;
+    if (this.simulation.matchWinner === null) {
+      this.fireworksLaunchedForMatch = false;
       return;
     }
-    if (this.fireworksLaunchedForRound) return;
+    if (this.fireworksLaunchedForMatch) return;
+
+    const width = this.fireworksLayer.clientWidth || window.innerWidth;
+    const height = this.fireworksLayer.clientHeight || window.innerHeight;
+    const explosionY = Math.round(height / 2);
+
+    this.matchResultFireworks.forEach((fireworksAtPoint, index) => {
+      // 25%・50%・75%の等間隔から垂直に打ち上げ、上下中央へ到達させる。
+      const pointPercent = ((index + 1) / (MATCH_RESULT_FIREWORKS + 1)) * 100;
+      const explosionX = Math.round((width * pointPercent) / 100);
+
+      // fireworks-jsの発射点と到達範囲を同じ座標へ固定して、斜めに飛ばないようにする。
+      fireworksAtPoint.forEach((fireworks) => {
+        fireworks.updateOptions({
+          rocketsPoint: { min: pointPercent, max: pointPercent },
+          boundaries: {
+            x: explosionX,
+            y: explosionY,
+            width: explosionX * 3,
+            height: explosionY * 2,
+            debug: false,
+          },
+        });
+        fireworks.launch(1);
+      });
+    });
 
     // 花火は演出専用であり、対戦の決定論的なゲーム状態には影響しない。
-    this.fireworksLaunchedForRound = true;
-    this.roundResultFireworks.launch(ROUND_RESULT_FIREWORKS);
+    this.fireworksLaunchedForMatch = true;
   }
+
+  /** Textの内容が変化した時だけ更新し、文字テクスチャの再生成を避ける。 */
 
   private setTextIfChanged(target: Text, value: string): void {
     if (target.text !== value) target.text = value;

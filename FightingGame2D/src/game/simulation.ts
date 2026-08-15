@@ -780,7 +780,9 @@ export class MatchSimulation implements DeterministicSimulation {
       defender.stun > 0 ||
       defender.guardStun > 0 ||
       defender.activeMoveId !== null
-    ) {return null}
+    ) {
+      return null;
+    }
 
     // 手動反転中でも「敵と反対方向」を後ろ入力として扱う。
     const awayButton =
