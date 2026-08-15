@@ -363,6 +363,14 @@ export async function loadGameData(
     throw new Error("characters.csv の id は重複なしで定義してください");
   }
 
+  // 同一キャラクター内の技ID重複は、実行中の技検索で先頭行だけが残るため禁止する。
+  const moveKeys = moves.map((move) => `${move.characterId}:${move.id}`);
+  if (new Set(moveKeys).size !== moveKeys.length) {
+    throw new Error(
+      "moves.csv の character_id と move_id の組み合わせは重複なしで定義してください",
+    );
+  }
+
   // 技から参照するコマンドIDの重複・未定義を早期に検出する。
   const commandIds = new Set(commands.map((command) => command.id));
   if (commandIds.size !== commands.length) {
