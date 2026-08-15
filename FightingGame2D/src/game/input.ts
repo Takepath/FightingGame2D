@@ -11,8 +11,7 @@ export type KeyboardAction =
   | "down"
   | "light"
   | "heavy"
-  | "special"
-  | "turn";
+  | "special";
 
 /** キーコンフィグ画面と入力処理で共有する、操作項目の定義。 */
 export interface KeyboardActionDefinition {
@@ -33,8 +32,6 @@ export const KEYBOARD_ACTIONS: readonly KeyboardActionDefinition[] = [
   { action: "light", label: "弱攻撃", button: InputButton.Light },
   { action: "heavy", label: "強攻撃", button: InputButton.Heavy },
   { action: "special", label: "必殺技", button: InputButton.Special },
-  // 向き反転は左右移動キーとの同時入力時だけ、InputButton.Turnへ変換する。
-  { action: "turn", label: "向き反転", button: InputButton.Turn },
 ] as const;
 
 /** キー割り当ての対象となるプレイヤーと操作項目。 */
@@ -85,7 +82,6 @@ const DEFAULT_KEYBOARD_BINDINGS: KeyboardBindings = {
     light: "KeyF",
     heavy: "KeyG",
     special: "KeyH",
-    turn: "ShiftLeft",
   },
   1: {
     left: "ArrowLeft",
@@ -95,7 +91,6 @@ const DEFAULT_KEYBOARD_BINDINGS: KeyboardBindings = {
     light: "Numpad1",
     heavy: "Numpad2",
     special: "Numpad3",
-    turn: "ShiftRight",
   },
 };
 
@@ -105,6 +100,19 @@ function cloneKeyboardBindings(): KeyboardBindings {
     0: { ...DEFAULT_KEYBOARD_BINDINGS[0] },
     1: { ...DEFAULT_KEYBOARD_BINDINGS[1] },
   };
+}
+
+/** 保存済み設定から有効な操作だけを複製し、廃止済みの振り向きキーを除去する。 */
+function copyActiveKeyboardBindings(
+  source: KeyboardBindings,
+): KeyboardBindings {
+  const bindings = cloneKeyboardBindings();
+  for (const player of PLAYERS) {
+    for (const { action } of KEYBOARD_ACTIONS) {
+      bindings[player][action] = source[player][action];
+    }
+  }
+  return bindings;
 }
 
 /** JSONとして復元した値がオブジェクトかを確認する。 */
@@ -125,18 +133,14 @@ function isValidKeyboardBindings(value: unknown): value is KeyboardBindings {
       const code = playerBindings[action];
       // 旧バージョンで保存された設定には向き反転キーがないため、
       // その項目だけ初期値を補完して既存のキー配置を維持する。
-      const resolvedCode =
-        action === "turn" && typeof code === "undefined"
-          ? DEFAULT_KEYBOARD_BINDINGS[player].turn
-          : code;
       if (
-        typeof resolvedCode !== "string" ||
-        !isConfigurableKeyboardCode(resolvedCode, action) ||
-        assignedCodes.has(resolvedCode)
+        typeof code !== "string" ||
+        !isConfigurableKeyboardCode(code) ||
+        assignedCodes.has(code)
       ) {
         return false;
       }
-      assignedCodes.add(resolvedCode);
+      assignedCodes.add(code);
     }
   }
 
@@ -152,16 +156,7 @@ function loadKeyboardBindings(): KeyboardBindings {
 
     const parsed: unknown = JSON.parse(stored);
     if (isValidKeyboardBindings(parsed)) {
-      return {
-        0: {
-          ...DEFAULT_KEYBOARD_BINDINGS[0],
-          ...parsed[0],
-        },
-        1: {
-          ...DEFAULT_KEYBOARD_BINDINGS[1],
-          ...parsed[1],
-        },
-      };
+      return copyActiveKeyboardBindings(parsed);
     }
   } catch {
     // プライベートモードなどで保存領域を利用できない場合も標準配置で続行する。
@@ -180,17 +175,12 @@ export function getKeyboardActionDefinition(
 }
 
 /** Esc・修飾キー・未識別キーをキーコンフィグ対象から除外する。 */
-export function isConfigurableKeyboardCode(
-  code: string,
-  action: KeyboardAction,
-): boolean {
-  const isTurnModifier =
-    action === "turn" && (code === "ShiftLeft" || code === "ShiftRight");
+export function isConfigurableKeyboardCode(code: string): boolean {
   return (
     code.length > 0 &&
     code !== "Unidentified" &&
     code !== FIXED_CANCEL_KEY_CODE &&
-    (isTurnModifier || !MODIFIER_KEY_CODES.has(code))
+    !MODIFIER_KEY_CODES.has(code)
   );
 }
 
@@ -243,7 +233,7 @@ export class KeyboardConfig {
     if (code === FIXED_CANCEL_KEY_CODE) {
       return { ok: false, reason: "reserved" };
     }
-    if (!isConfigurableKeyboardCode(code, target.action)) {
+    if (!isConfigurableKeyboardCode(code)) {
       return { ok: false, reason: "modifier" };
     }
 
@@ -315,23 +305,13 @@ export class InputManager {
   /** 指定プレイヤーの現在の入力をフレーム入力へ変換する。 */
   public sample(player: PlayerId): FrameInput {
     let buttons = 0;
-    const leftKey = keyboardConfig.getBinding(player, "left");
-    const rightKey = keyboardConfig.getBinding(player, "right");
-    const turnKey = keyboardConfig.getBinding(player, "turn");
-    const turnRequested =
-      this.heldKeys.has(turnKey) &&
-      (this.heldKeys.has(leftKey) || this.heldKeys.has(rightKey));
 
     for (const { action, button } of KEYBOARD_ACTIONS) {
       // 向き反転キー単体では操作にせず、左右キーとの同時入力だけで扱う。
-      if (action === "turn") continue;
-      if (turnRequested && (action === "left" || action === "right")) continue;
       if (this.heldKeys.has(keyboardConfig.getBinding(player, action))) {
         buttons |= button;
       }
     }
-
-    if (turnRequested) buttons |= InputButton.Turn;
 
     const gamepad = navigator.getGamepads()[player];
     if (gamepad?.connected) buttons |= this.sampleXboxGamepad(gamepad);

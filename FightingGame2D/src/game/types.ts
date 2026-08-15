@@ -7,8 +7,6 @@ export const enum InputButton {
   Light = 1 << 4,
   Heavy = 1 << 5,
   Special = 1 << 6,
-  /** Shift + A / D による手動の向き反転。 */
-  Turn = 1 << 7,
 }
 
 export interface FrameInput {

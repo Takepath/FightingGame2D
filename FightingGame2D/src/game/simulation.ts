@@ -132,8 +132,6 @@ export class MatchSimulation implements DeterministicSimulation {
     commands: readonly CommandDefinition[],
     /** トレーニング中は時計を止め、∞表示にする。 */
     private readonly training = false,
-    /** P2がCPUの試合だけ、相手位置に合わせた自動振り向きを許可する。 */
-    private readonly autoFacePlayerTwo = false,
   ) {
     /** 使用キャラクターとCSV技定義から、2人分の初期状態を生成する。 */
     this.createMoveIndexes(moves);
@@ -185,7 +183,7 @@ export class MatchSimulation implements DeterministicSimulation {
       return;
     }
 
-    this.updateCpuFacing();
+    this.updateFacing();
     this.updateFighter(this.fighters[0], inputs[0]);
     this.updateFighter(this.fighters[1], inputs[1]);
     this.resolveAttack(this.fighters[0], this.fighters[1], inputs[1]);
@@ -195,6 +193,8 @@ export class MatchSimulation implements DeterministicSimulation {
     if (this.training && this.trainingResetFrames > 0) return;
     this.updateProjectiles(inputs);
     this.resolveCollision();
+    // 飛び越えや押し戻し後の位置も反映し、次フレームの入力方向を正しく判定する。
+    this.updateFacing();
   }
 
   public resetMatch(): void {
@@ -242,13 +242,13 @@ export class MatchSimulation implements DeterministicSimulation {
     };
   }
 
-  /** CPUであるP2だけは、相手を通り越した時も攻撃方向を自動で合わせる。 */
-  private updateCpuFacing(): void {
-    if (!this.autoFacePlayerTwo) return;
+  /** 両プレイヤーを相手側へ自動で向け、飛び越え後も攻撃・コマンド方向を一致させる。 */
+  private updateFacing(): void {
+    const [playerOne, playerTwo] = this.fighters;
+    if (playerOne.x === playerTwo.x) return;
 
-    const [opponent, cpu] = this.fighters;
-    if (opponent.x === cpu.x) return;
-    cpu.facing = cpu.x < opponent.x ? 1 : -1;
+    playerOne.facing = playerOne.x < playerTwo.x ? 1 : -1;
+    playerTwo.facing = playerOne.facing === 1 ? -1 : 1;
   }
 
   /** 次の固定フレームで指定ファイターへ命中する攻撃があるかを予測する。 */
@@ -312,11 +312,6 @@ export class MatchSimulation implements DeterministicSimulation {
       return;
     }
     const newlyPressed = input.buttons & ~fighter.previousButtons;
-
-    if ((newlyPressed & InputButton.Turn) !== 0) {
-      // 向きは相手位置で変えず、手動反転入力があった時だけ切り替える。
-      fighter.facing = fighter.facing === 1 ? -1 : 1;
-    }
 
     if (fighter.stun > 0) {
       fighter.stun -= 1;
@@ -784,7 +779,7 @@ export class MatchSimulation implements DeterministicSimulation {
       return null;
     }
 
-    // 手動反転中でも「敵と反対方向」を後ろ入力として扱う。
+    // 自動振り向き後の相手位置を基準に、「敵と反対方向」を後ろ入力として扱う。
     const awayButton =
       attacker.x >= defender.x ? InputButton.Left : InputButton.Right;
     // 前後同時入力は前入力を優先し、後ろガードを無効にする。

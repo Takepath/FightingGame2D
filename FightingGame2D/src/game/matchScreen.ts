@@ -309,7 +309,6 @@ export class MatchScreen extends Container {
       data.moves,
       data.commands,
       this.training,
-      this.training || this.cpuLevel !== null,
     );
     this.cpu = this.cpuLevel === null ? null : new CpuController(this.cpuLevel);
     this.trainingCpu = this.training ? new TrainingCpuController() : null;
