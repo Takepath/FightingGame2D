@@ -227,22 +227,23 @@ river_guard,river_shot,special,10,2,28,11,0,0,390,220,27,special,projectile,700,
 
 `moves.csv` の主要列は次のとおりです。
 
-| 列                                         | 内容                                                  |
-| ------------------------------------------ | ----------------------------------------------------- |
-| `character_id`                             | この技を使えるキャラクターID。全員共通は `all`。      |
-| `move_id`                                  | 技ID。キャラクター内で重複させません。                |
-| `button`                                   | `light`、`heavy`、`special`。                         |
-| `startup` / `active` / `recovery`          | 発生・持続・硬直。すべて60FPS固定フレームです。       |
-| `damage`                                   | ダメージ。                                            |
-| `range_x` / `range_y`                      | 近接技の前方リーチ・上下判定。                        |
-| `knockback_x` / `knockback_y`              | 命中時の横・縦方向の吹き飛び。                        |
-| `hitstun`                                  | 命中時の硬直フレーム。                                |
-| `animation`                                | JSONのアクション名。`light`・`heavy`・`special`など。 |
-| `attack_type`                              | `melee` または `projectile`。                         |
-| `projectile_speed` / `projectile_lifetime` | 飛び道具の速度・生存フレーム。近接技は `0`。          |
-| `use_state`                                | `ground`、`air`、`any`。                              |
-| `attack_level`                             | `high`、`mid`、`low`。                                |
-| `command_id`                               | `commands.csv` のID。ボタンだけで出す技は空欄。       |
+| 列                                         | 内容                                                               |
+| ------------------------------------------ | ------------------------------------------------------------------ |
+| `character_id`                             | この技を使えるキャラクターID。全員共通は `all`。                   |
+| `move_id`                                  | 技ID。キャラクター内で重複させません。                             |
+| `button`                                   | `light`、`heavy`、`special`。                                      |
+| `startup` / `active` / `recovery`          | 発生・持続・硬直。すべて60FPS固定フレームです。                    |
+| `damage`                                   | ダメージ。                                                         |
+| `range_x` / `range_y`                      | 近接技の前方リーチ・上下判定。                                     |
+| `self_move_x` / `self_move_y`              | 技開始時に自分へ与える前方・上方向の速度（px/秒）。正のY値は上昇。 |
+| `knockback_x` / `knockback_y`              | 命中時の横・縦方向の吹き飛び。                                     |
+| `hitstun`                                  | 命中時の硬直フレーム。                                             |
+| `animation`                                | JSONのアクション名。`light`・`heavy`・`special`など。              |
+| `attack_type`                              | `melee` または `projectile`。                                      |
+| `projectile_speed` / `projectile_lifetime` | 飛び道具の速度・生存フレーム。近接技は `0`。                       |
+| `use_state`                                | `ground`、`air`、`any`。                                           |
+| `attack_level`                             | `high`、`mid`、`low`。                                             |
+| `command_id`                               | `commands.csv` のID。ボタンだけで出す技は空欄。                    |
 
 ガード属性は、`high` が立ちガードのみ、`low` がしゃがみガードのみ、`mid` が両方でガード可能です。ガード成功時のダメージは0です。
 

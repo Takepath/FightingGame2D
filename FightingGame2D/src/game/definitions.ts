@@ -12,6 +12,8 @@ import {
   InputButton,
   type MoveDefinition,
   type MoveUseState,
+  type ProjectileDefinition,
+  type ProjectileRenderType,
 } from "./types";
 
 /** ゲームデータCSVの読み込み元。ゲーム設定から差し替えられる。 */
@@ -19,6 +21,7 @@ export interface GameDataSourcePaths {
   charactersCsv: string;
   movesCsv: string;
   commandsCsv: string;
+  projectilesCsv: string;
 }
 
 /** キャラクター選択画面が扱える絶対上限。 */
@@ -70,6 +73,23 @@ async function loadText(path: string): Promise<string> {
  */
 function toColor(value: string): number {
   return Number.parseInt(value.replace("#", ""), 16);
+}
+
+/** 飛び道具用の色を読み込み、未指定時は既定色へ戻す。 */
+function toColorOr(value: string, fallback: number): number {
+  const color = toColor(value);
+  return Number.isFinite(color) ? color : fallback;
+}
+
+/** CSVの正の数値を読み込み、未指定・不正値は既定値へ戻す。 */
+function toPositiveNumber(value: string, fallback: number): number {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : fallback;
+}
+
+/** CSVの飛び道具描画方式を、対応済みの方式へ正規化する。 */
+function toProjectileRenderType(value: string): ProjectileRenderType {
+  return value === "sprite" ? "sprite" : "circle";
 }
 
 /**
@@ -163,6 +183,9 @@ function parseMoves(source: string): MoveDefinition[] {
     damage: Number(row.damage),
     rangeX: Number(row.range_x),
     rangeY: Number(row.range_y),
+    // 技開始時に攻撃側へ与える移動量。正のY値は上方向へ移動する。
+    selfMoveX: Number(row.self_move_x) || 0,
+    selfMoveY: Number(row.self_move_y) || 0,
     knockbackX: Number(row.knockback_x),
     knockbackY: Number(row.knockback_y),
     hitstun: Number(row.hitstun),
@@ -182,9 +205,28 @@ function parseMoves(source: string): MoveDefinition[] {
     // 飛び道具用パラメータ
     projectileSpeed: Number(row.projectile_speed) || 0,
     projectileLifetime: Number(row.projectile_lifetime) || 0,
+    // projectiles.csv の見た目定義を参照するID。近接技は空欄のままにする。
+    projectileId: row.projectile_id || null,
 
     // commands.csv を参照する技だけが、方向コマンドを必要とする。
     commandId: row.command_id || null,
+  }));
+}
+
+/** projectiles.csvを飛び道具の見た目定義へ変換する。 */
+function parseProjectileDefinitions(source: string): ProjectileDefinition[] {
+  return csvRecords(source).map((row) => ({
+    id: row.id,
+    renderType: toProjectileRenderType(row.render_type),
+    asset: row.asset,
+    width: toPositiveNumber(row.width, 44),
+    height: toPositiveNumber(row.height, 44),
+    outerRadius: toPositiveNumber(row.outer_radius, 22),
+    middleRadius: toPositiveNumber(row.middle_radius, 14),
+    coreRadius: toPositiveNumber(row.core_radius, 7),
+    outerColor: toColorOr(row.outer_color, 0x4fd8ff),
+    middleColor: toColorOr(row.middle_color, 0x4fd8ff),
+    coreColor: toColorOr(row.core_color, 0xe8f8ff),
   }));
 }
 
@@ -233,22 +275,34 @@ function parseCommands(source: string): CommandDefinition[] {
  * - キャラクター定義
  * - 技データ
  * - コマンド定義
+ * - 飛び道具の見た目定義
  */
 export async function loadGameData(
   paths: GameDataSourcePaths,
   maxCharacters = MAX_SELECTABLE_CHARACTERS,
 ): Promise<GameData> {
   // CSVファイルを並列で読み込む
-  const [characterCsv, moveCsv, commandCsv] = await Promise.all([
+  const [characterCsv, moveCsv, commandCsv, projectileCsv] = await Promise.all([
     loadText(paths.charactersCsv),
     loadText(paths.movesCsv),
     loadText(paths.commandsCsv),
+    loadText(paths.projectilesCsv),
   ]);
 
   // CSVをゲームデータへ変換
   const characters = parseCharacters(characterCsv);
   const moves = parseMoves(moveCsv);
   const commands = parseCommands(commandCsv);
+  const projectileDefinitions = parseProjectileDefinitions(projectileCsv);
+
+  // PNGスプライトを使う飛び道具は、対戦画面へ進む前にテクスチャを読み込む。
+  await Promise.all(
+    projectileDefinitions
+      .filter(
+        (projectile) => projectile.renderType === "sprite" && projectile.asset,
+      )
+      .map((projectile) => Assets.load(gameUrl(projectile.asset))),
+  );
 
   // Blender指定キャラクターの、書き出し済みアニメーションJSONを並列で読み込む。
   const blenderAnimations: Record<string, BlenderAnimationData> = {};
@@ -322,11 +376,43 @@ export async function loadGameData(
     }
   }
 
+  // 飛び道具IDの重複や、技CSVからの不正な参照を起動時に検出する。
+  const projectileIds = new Set(
+    projectileDefinitions.map((projectile) => projectile.id),
+  );
+  if (
+    projectileDefinitions.some((projectile) => !projectile.id) ||
+    projectileIds.size !== projectileDefinitions.length
+  ) {
+    throw new Error("projectiles.csv の id は空欄・重複なしで定義してください");
+  }
+  for (const projectile of projectileDefinitions) {
+    if (projectile.renderType === "sprite" && !projectile.asset) {
+      throw new Error(
+        `projectiles.csv の ${projectile.id} は sprite の asset を指定してください`,
+      );
+    }
+  }
+  for (const move of moves) {
+    if (move.attackType === "projectile") {
+      if (!move.projectileId || !projectileIds.has(move.projectileId)) {
+        throw new Error(
+          `moves.csv の ${move.id} は有効な projectile_id を指定してください`,
+        );
+      }
+    } else if (move.projectileId !== null) {
+      throw new Error(
+        `moves.csv の近接技 ${move.id} に projectile_id は指定できません`,
+      );
+    }
+  }
+
   // 全ゲームデータを返す
   return {
     characters,
     moves,
     commands,
+    projectileDefinitions,
     blenderAnimations,
   };
 }

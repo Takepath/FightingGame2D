@@ -1,5 +1,5 @@
 import type { Ticker } from "pixi.js";
-import { Container, Graphics, Text } from "pixi.js";
+import { Container, Graphics, Sprite, Text } from "pixi.js";
 import { Fireworks } from "fireworks-js";
 import { CpuController, type CpuLevel } from "./cpu";
 import { FrameSynchronizer } from "./frameSynchronizer";
@@ -21,6 +21,7 @@ import {
   MatchSimulation,
   STAGE_HEIGHT,
   STAGE_WIDTH,
+  type ProjectileState,
 } from "./simulation";
 import {
   TrainingCpuController,
@@ -29,7 +30,12 @@ import {
   type TrainingJumpMode,
   type TrainingMoveMode,
 } from "./trainingCpu";
-import { InputButton, type CharacterDefinition, type GameData } from "./types";
+import {
+  InputButton,
+  type CharacterDefinition,
+  type GameData,
+  type ProjectileDefinition,
+} from "./types";
 
 // 60FPS固定シミュレーション用の更新間隔
 const FIXED_STEP_MS = 1000 / 60;
@@ -79,6 +85,18 @@ export class MatchScreen extends Container {
 
   /** 飛び道具描画 */
   private readonly projectileArt = new Graphics();
+
+  /** PNGを使う飛び道具を重ねる描画レイヤー。 */
+  private readonly projectileSpriteLayer = new Container();
+
+  /** 飛び道具状態ごとに再利用するPNGスプライト。 */
+  private readonly projectileSprites = new Map<ProjectileState, Sprite>();
+
+  /** projectiles.csv の定義をIDで引ける描画用索引。 */
+  private readonly projectileDefinitionsById = new Map<
+    string,
+    ProjectileDefinition
+  >();
 
   /** HUD(体力バーなど) */
   private readonly hudArt = new Graphics();
@@ -263,6 +281,11 @@ export class MatchScreen extends Container {
     const data = MatchScreen.gameData;
     if (!data) throw new Error("ゲームデータが初期化されていません");
 
+    // 対戦中のCSV配列走査を避けるため、飛び道具の見た目をIDで索引化する。
+    for (const definition of data.projectileDefinitions) {
+      this.projectileDefinitionsById.set(definition.id, definition);
+    }
+
     // 使用キャラクター決定
     const selectedCharacters = MatchScreen.selectedCharacters;
     if (!selectedCharacters) {
@@ -354,6 +377,7 @@ export class MatchScreen extends Container {
     this.world.addChild(
       this.stageArt,
       this.projectileArt,
+      this.projectileSpriteLayer,
       this.fighterViews[0],
       this.fighterViews[1],
       this.hudArt,
@@ -532,6 +556,8 @@ export class MatchScreen extends Container {
 
   /** 終了処理 */
   public reset(): void {
+    // 対戦画面を閉じる時は、再利用していた飛び道具PNGも確実に解放する。
+    this.clearProjectileSprites();
     // 画面遷移時は残っている花火Canvasも停止・破棄する。
     this.matchResultFireworks.forEach((fireworksAtPoint) => {
       fireworksAtPoint.forEach((fireworks) => fireworks.stop(true));
@@ -1074,28 +1100,83 @@ export class MatchScreen extends Container {
     if (target.text !== value) target.text = value;
   }
 
-  /**
-   * 飛び道具描画
-   * 全Projectileを円形エフェクトとして表示
-   */
+  /** projectiles.csv の定義に応じて、円形またはPNGの飛び道具を描画する。 */
   private drawProjectiles(): void {
     const projectiles = this.simulation.projectiles;
     if (projectiles.length === 0) {
       if (this.hadProjectiles) this.projectileArt.clear();
       this.hadProjectiles = false;
+      this.clearProjectileSprites();
       return;
     }
 
     this.hadProjectiles = true;
     this.projectileArt.clear();
+    const activeSpriteProjectiles = new Set<ProjectileState>();
     for (const projectile of projectiles) {
+      const definition = this.projectileDefinitionsById.get(
+        projectile.visualId,
+      );
+      if (!definition) continue;
+
       const x = projectile.x / 100;
       const y = projectile.y / 100;
-      const color =
-        this.simulation.fighters[projectile.owner].character.accentColor;
-      this.projectileArt.circle(x, y, 22).fill({ color, alpha: 0.16 });
-      this.projectileArt.circle(x, y, 14).fill({ color, alpha: 0.5 });
-      this.projectileArt.circle(x, y, 7).fill({ color: 0xe8f8ff });
+      if (definition.renderType === "sprite") {
+        activeSpriteProjectiles.add(projectile);
+        const sprite = this.projectileSpriteFor(projectile, definition);
+        sprite.position.set(x, y);
+        continue;
+      }
+
+      this.projectileArt
+        .circle(x, y, definition.outerRadius)
+        .fill({ color: definition.outerColor, alpha: 0.16 });
+      this.projectileArt
+        .circle(x, y, definition.middleRadius)
+        .fill({ color: definition.middleColor, alpha: 0.5 });
+      this.projectileArt
+        .circle(x, y, definition.coreRadius)
+        .fill({ color: definition.coreColor });
     }
+    this.removeInactiveProjectileSprites(activeSpriteProjectiles);
+  }
+
+  /** 指定飛び道具のPNGを一度だけ生成し、後続フレームでは再利用する。 */
+  private projectileSpriteFor(
+    projectile: ProjectileState,
+    definition: ProjectileDefinition,
+  ): Sprite {
+    const existing = this.projectileSprites.get(projectile);
+    if (existing) return existing;
+
+    const sprite = Sprite.from(this.gameAssetUrl(definition.asset));
+    sprite.anchor.set(0.5);
+    sprite.width = definition.width;
+    sprite.height = definition.height;
+    this.projectileSpriteLayer.addChild(sprite);
+    this.projectileSprites.set(projectile, sprite);
+    return sprite;
+  }
+
+  /** 消滅済み・円形へ変更済みの飛び道具PNGだけを破棄する。 */
+  private removeInactiveProjectileSprites(
+    activeProjectiles: ReadonlySet<ProjectileState>,
+  ): void {
+    for (const [projectile, sprite] of this.projectileSprites) {
+      if (activeProjectiles.has(projectile)) continue;
+      sprite.destroy();
+      this.projectileSprites.delete(projectile);
+    }
+  }
+
+  /** 対戦終了時などに、保持中の飛び道具PNGをすべて破棄する。 */
+  private clearProjectileSprites(): void {
+    for (const sprite of this.projectileSprites.values()) sprite.destroy();
+    this.projectileSprites.clear();
+  }
+
+  /** public配下のゲームアセットを、Viteの公開URLへ変換する。 */
+  private gameAssetUrl(path: string): string {
+    return `${import.meta.env.BASE_URL}${path.replace(/^\//, "")}`;
   }
 }

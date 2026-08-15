@@ -34,6 +34,8 @@ export const FIGHTING_GAME_CONFIG: FightingGameConfig = {
     charactersCsv: "data/characters.csv",
     movesCsv: "data/moves.csv",
     commandsCsv: "data/commands.csv",
+    // 飛び道具ごとの見た目・PNGアセットを分離して管理するCSV。
+    projectilesCsv: "data/projectiles.csv",
   },
   onlineRoom: {
     minPassphraseLength: 4,

@@ -90,6 +90,10 @@ Top画面で「ローカル対戦」を選ぶと、キャラクター選択画�
 - `public/data/characters.csv` がキャラクター、`public/data/moves.csv` が技の開始・持続・硬直・ダメージ・リーチ等を管理します。キャラクター選択はCSVの2〜25体をそのまま表示し、少ないほどアイコンを大きく表示します。`characters.csv` の `icon_asset` には `public` 配下のPNGパス（例: `data/icons/hero.png`）を登録でき、未指定・読込失敗時は既定アイコンを表示します。`hurtbox_width / hurtbox_top / hurtbox_bottom` で本体に沿う被弾判定を調整できます。`moves.csv` の `use_state` は `ground`（地上）、`air`（空中）、`any`（両方）を指定できます。`attack_level` は `high`（立ちガードのみ可）・`mid`（立ち／しゃがみガード可）・`low`（しゃがみガードのみ可）を指定します。起動時にCSVを読み込みます。
 - `blender_hero` と `stickMan` はプログラム描画の棒人間です。`crocodile_soldier` は `crocodile_soldier.json` のスプライトポーズを再生する、Blenderアニメーション対応キャラクターです。
 
+## 技中移動CSV
+
+`moves.csv` の `range_y` と `knockback_x` の間にある `self_move_x` / `self_move_y` は、技を開始したキャラクター自身へ与える移動速度です。単位はピクセル/秒で、`self_move_x` の正値は前方、`self_move_y` の正値は上方向です。昇竜拳のような前進・上昇技には両方を設定します。`0` の場合は追加移動しません。
+
 ## コマンド技CSV
 
 方向コマンドは [commands.csv](public/data/commands.csv) に定義し、[moves.csv](public/data/moves.csv) の `command_id` で参照します。`command_id` が空の技は、従来どおりボタンだけで発動します。

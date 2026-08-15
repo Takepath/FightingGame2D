@@ -32,6 +32,9 @@ export type MoveUseState = "ground" | "air" | "any";
 /** 攻撃のガード属性。highは立ち、lowはしゃがみ、midは両方でガードできる。 */
 export type AttackLevel = "high" | "mid" | "low";
 
+/** 飛び道具の描画方式。circleはコード描画、spriteはPNG画像を使用する。 */
+export type ProjectileRenderType = "circle" | "sprite";
+
 /** キャラクター選択後に指定するカラー種別。defaultはcharacters.csvの色を使う。 */
 export type ColorVariant = "default" | "black" | "red" | "yellow" | "white";
 
@@ -68,6 +71,10 @@ export interface MoveDefinition {
   rangeX: number;
   /** 攻撃中心から上下へ伸びる判定の余白（ピクセル）。 */
   rangeY: number;
+  /** 技開始時に前方へ与える自分自身の移動速度（ピクセル/秒）。 */
+  selfMoveX: number;
+  /** 技開始時に上方向へ与える自分自身の移動速度（ピクセル/秒）。 */
+  selfMoveY: number;
   knockbackX: number;
   knockbackY: number;
   hitstun: number;
@@ -79,8 +86,30 @@ export interface MoveDefinition {
   attackType: "melee" | "projectile";
   projectileSpeed: number;
   projectileLifetime: number;
+  /** projectiles.csv の id。近接技では未指定にする。 */
+  projectileId: string | null;
   /** commands.csv の command_id。空文字なら攻撃ボタンだけで技を出す。 */
   commandId: string | null;
+}
+
+/** projectiles.csv で管理する飛び道具の見た目定義。 */
+export interface ProjectileDefinition {
+  id: string;
+  renderType: ProjectileRenderType;
+  /** render_type=sprite の時に使用するPNGファイル。 */
+  asset: string;
+  /** スプライト描画時の幅。円形描画では使用しない。 */
+  width: number;
+  /** スプライト描画時の高さ。円形描画では使用しない。 */
+  height: number;
+  /** 円形エフェクトの外側・中間・中心の半径。 */
+  outerRadius: number;
+  middleRadius: number;
+  coreRadius: number;
+  /** 円形エフェクトに使用する外側・中間・中心の色。 */
+  outerColor: number;
+  middleColor: number;
+  coreColor: number;
 }
 
 export interface CharacterDefinition {
@@ -153,6 +182,8 @@ export interface GameData {
   characters: CharacterDefinition[];
   moves: MoveDefinition[];
   commands: CommandDefinition[];
+  /** projectiles.csv から読み込む、飛び道具の見た目定義。 */
+  projectileDefinitions: ProjectileDefinition[];
   /** character.csvでblender指定されたキャラクターのアニメーションデータ。 */
   blenderAnimations: Record<string, BlenderAnimationData>;
 }

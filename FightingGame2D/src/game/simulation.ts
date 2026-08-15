@@ -26,6 +26,9 @@ const AIR_DRAG_PERCENT = 97;
 const PUSHBOX_PADDING = 8 * POSITION_SCALE;
 const ATTACK_CENTER_FROM_GROUND = 86 * POSITION_SCALE;
 const PROJECTILE_HITBOX_RADIUS = 14 * POSITION_SCALE;
+/** ガード解除や技選択で扱う、全攻撃ボタンのビット集合。 */
+const ATTACK_BUTTON_MASK =
+  InputButton.Light | InputButton.Heavy | InputButton.Special;
 
 /** 固定60FPSを秒数へ換算するためのフレーム数。 */
 export const FRAMES_PER_SECOND = 60;
@@ -50,6 +53,10 @@ const COMBO_LIGHT_CANCEL_LIMIT = 3;
 
 /** 1コンボ中にキャンセル先として選べる強攻撃の最大回数。 */
 const COMBO_HEAVY_CANCEL_LIMIT = 2;
+
+/** 弱・強を種類ごとに切り替えても超えられない、通常技キャンセルの総数。 */
+const COMBO_NORMAL_CANCEL_LIMIT =
+  COMBO_LIGHT_CANCEL_LIMIT + COMBO_HEAVY_CANCEL_LIMIT;
 
 /** 後ろ入力で選ばれるガード姿勢。 */
 type GuardStance = "standing" | "crouching";
@@ -85,6 +92,8 @@ export interface FighterState {
   comboLightCancels: number;
   /** 現在のコンボでキャンセル先に選んだ強攻撃の回数。 */
   comboHeavyCancels: number;
+  /** 現在のコンボでキャンセル先に選んだ弱・強の合計回数。 */
+  comboNormalCancels: number;
   /** 現在のコンボで必殺技キャンセルを使用済みか。 */
   comboSpecialCanceled: boolean;
   /** キャンセルされなかった時だけ適用する、保留中のノックバック。 */
@@ -101,6 +110,8 @@ export interface FighterState {
 export interface ProjectileState {
   /** 波動拳など、フレーム更新で移動する飛び道具の状態。 */
   owner: PlayerId;
+  /** projectiles.csv を参照する見た目ID。 */
+  visualId: string;
   x: number;
   y: number;
   velocityX: number;
@@ -263,6 +274,7 @@ export class MatchSimulation implements DeterministicSimulation {
       comboCancelable: false,
       comboLightCancels: 0,
       comboHeavyCancels: 0,
+      comboNormalCancels: 0,
       comboSpecialCanceled: false,
       pendingKnockback: null,
       stun: 0,
@@ -354,13 +366,21 @@ export class MatchSimulation implements DeterministicSimulation {
     }
 
     if (fighter.guardStun > 0) {
-      fighter.guardStun -= 1;
-      fighter.action =
-        fighter.guardStance === "crouching" ? "crouchBlock" : "block";
-      fighter.actionFrame += 1;
-      this.applyPhysics(fighter);
-      fighter.previousButtons = input.buttons;
-      return;
+      if ((newlyPressed & ATTACK_BUTTON_MASK) !== 0) {
+        // 攻撃ボタンを押したらガード硬直を解除し、同じ入力で攻撃開始を許可する。
+        fighter.guardStun = 0;
+        fighter.guardStance = null;
+        fighter.action = "idle";
+        fighter.actionFrame = 0;
+      } else {
+        fighter.guardStun -= 1;
+        fighter.action =
+          fighter.guardStance === "crouching" ? "crouchBlock" : "block";
+        fighter.actionFrame += 1;
+        this.applyPhysics(fighter);
+        fighter.previousButtons = input.buttons;
+        return;
+      }
     }
 
     const activeMove = this.moveFor(fighter, fighter.activeMoveId);
@@ -514,20 +534,41 @@ export class MatchSimulation implements DeterministicSimulation {
     fighter.attackConnected = false;
     fighter.projectileSpawned = false;
     fighter.comboCancelable = false;
+    this.applySelfMove(fighter, move);
 
     if (!isComboCancel) {
       // 通常始動では、前のコンボのキャンセル回数を初期化する。
       fighter.comboLightCancels = 0;
       fighter.comboHeavyCancels = 0;
+      fighter.comboNormalCancels = 0;
       fighter.comboSpecialCanceled = false;
       return;
     }
 
     // キャンセル先の種別を記録し、弱3回・強2回・必殺1回の上限を守る。
-    if (move.button === InputButton.Light) fighter.comboLightCancels += 1;
-    else if (move.button === InputButton.Heavy) fighter.comboHeavyCancels += 1;
-    else if (move.button === InputButton.Special)
+    if (move.button === InputButton.Light) {
+      fighter.comboLightCancels += 1;
+      fighter.comboNormalCancels += 1;
+    } else if (move.button === InputButton.Heavy) {
+      fighter.comboHeavyCancels += 1;
+      fighter.comboNormalCancels += 1;
+    } else if (move.button === InputButton.Special)
       fighter.comboSpecialCanceled = true;
+  }
+
+  /** CSVのself_move_x/yを、向きと60FPS固定フレームに合わせて自分へ適用する。 */
+  private applySelfMove(fighter: FighterState, move: MoveDefinition): void {
+    if (move.selfMoveX !== 0) {
+      fighter.velocityX =
+        fighter.facing *
+        Math.round((move.selfMoveX * POSITION_SCALE) / FRAMES_PER_SECOND);
+    }
+    if (move.selfMoveY !== 0) {
+      // CSVの正のY値を上昇として扱い、ゲーム座標系の負Y速度へ変換する。
+      fighter.velocityY = -Math.round(
+        (move.selfMoveY * POSITION_SCALE) / FRAMES_PER_SECOND,
+      );
+    }
   }
 
   /** 命中した弱・強から、指定回数内の弱・強または必殺技へキャンセルできるか返す。 */
@@ -540,10 +581,18 @@ export class MatchSimulation implements DeterministicSimulation {
       return false;
     }
     if (cancelMove.button === InputButton.Light) {
-      return fighter.comboLightCancels < COMBO_LIGHT_CANCEL_LIMIT;
+      // 強攻撃から弱攻撃へ戻る逆順キャンセルを禁止し、弱・強の交互連打を防ぐ。
+      if (activeMove.button === InputButton.Heavy) return false;
+      return (
+        fighter.comboNormalCancels < COMBO_NORMAL_CANCEL_LIMIT &&
+        fighter.comboLightCancels < COMBO_LIGHT_CANCEL_LIMIT
+      );
     }
     if (cancelMove.button === InputButton.Heavy) {
-      return fighter.comboHeavyCancels < COMBO_HEAVY_CANCEL_LIMIT;
+      return (
+        fighter.comboNormalCancels < COMBO_NORMAL_CANCEL_LIMIT &&
+        fighter.comboHeavyCancels < COMBO_HEAVY_CANCEL_LIMIT
+      );
     }
     return (
       cancelMove.button === InputButton.Special && !fighter.comboSpecialCanceled
@@ -635,7 +684,7 @@ export class MatchSimulation implements DeterministicSimulation {
 
     if (!this.isMeleeInRange(attacker, defender, move)) return;
 
-    const landed = this.applyHit(
+    const connected = this.applyHit(
       attacker,
       defender,
       move,
@@ -643,7 +692,8 @@ export class MatchSimulation implements DeterministicSimulation {
       this.isComboSourceMove(move),
     );
     attacker.attackConnected = true;
-    attacker.comboCancelable = landed && this.isComboSourceMove(move);
+    // 命中・ガードのどちらでも、弱・強は次の技へキャンセルできる。
+    attacker.comboCancelable = connected && this.isComboSourceMove(move);
   }
 
   /** 攻撃者の前方・リーチ・高さが、相手の被弾判定に届いているかを返す。 */
@@ -679,6 +729,7 @@ export class MatchSimulation implements DeterministicSimulation {
     /** 攻撃者の向きとCSV速度を使い、波動拳の初期状態を生成する。 */
     this.projectiles.push({
       owner: attacker.player,
+      visualId: move.projectileId ?? "",
       x: attacker.x + attacker.facing * 64 * POSITION_SCALE,
       y: attacker.y - 82 * POSITION_SCALE,
       velocityX:
@@ -799,7 +850,8 @@ export class MatchSimulation implements DeterministicSimulation {
       defender.activeMoveId = null;
       this.finishRound(attacker.player);
     }
-    return !defending;
+    // ガードされた場合も攻撃が接触した事実を返し、攻撃側のキャンセルを許可する。
+    return true;
   }
 
   private applyAirControl(fighter: FighterState, input: FrameInput): void {

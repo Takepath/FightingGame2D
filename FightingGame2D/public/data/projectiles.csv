@@ -1,0 +1,3 @@
+id,render_type,asset,width,height,outer_radius,middle_radius,core_radius,outer_color,middle_color,core_color
+hadoken_blue,circle,,44,44,22,14,7,#4FD8FF,#4FD8FF,#E8F8FF
+fire_orb,circle,,60,60,30,19,9,#FF3824,#FF8B2C,#FFF0A3
