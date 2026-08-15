@@ -45,8 +45,24 @@ export const ROUND_INTRO_FRAMES = FRAMES_PER_SECOND * 2;
 /** ラウンド勝者を表示してから次のラウンドへ進む時間（固定フレーム）。 */
 const ROUND_RESULT_FRAMES = FRAMES_PER_SECOND * 4;
 
+/** 1コンボ中にキャンセル先として選べる弱攻撃の最大回数。 */
+const COMBO_LIGHT_CANCEL_LIMIT = 3;
+
+/** 1コンボ中にキャンセル先として選べる強攻撃の最大回数。 */
+const COMBO_HEAVY_CANCEL_LIMIT = 2;
+
 /** 後ろ入力で選ばれるガード姿勢。 */
 type GuardStance = "standing" | "crouching";
+
+/** キャンセルの成否が確定するまで、被弾側で保留するノックバック。 */
+interface PendingKnockback {
+  /** このノックバックを発生させた攻撃側。 */
+  readonly attacker: PlayerId;
+  /** 攻撃時の向きを反映済みの横速度。 */
+  readonly velocityX: number;
+  /** 攻撃時の縦速度。 */
+  readonly velocityY: number;
+}
 
 export interface FighterState {
   /** 固定小数点座標で保持する、各プレイヤーの決定論的な戦闘状態。 */
@@ -63,6 +79,16 @@ export interface FighterState {
   activeMoveId: string | null;
   attackConnected: boolean;
   projectileSpawned: boolean;
+  /** 命中した弱・強から、次の攻撃へキャンセルできる状態か。 */
+  comboCancelable: boolean;
+  /** 現在のコンボでキャンセル先に選んだ弱攻撃の回数。 */
+  comboLightCancels: number;
+  /** 現在のコンボでキャンセル先に選んだ強攻撃の回数。 */
+  comboHeavyCancels: number;
+  /** 現在のコンボで必殺技キャンセルを使用済みか。 */
+  comboSpecialCanceled: boolean;
+  /** キャンセルされなかった時だけ適用する、保留中のノックバック。 */
+  pendingKnockback: PendingKnockback | null;
   stun: number;
   /** ガード成功後に操作を抑止してガード姿勢を維持するフレーム数。 */
   guardStun: number;
@@ -234,6 +260,11 @@ export class MatchSimulation implements DeterministicSimulation {
       activeMoveId: null,
       attackConnected: false,
       projectileSpawned: false,
+      comboCancelable: false,
+      comboLightCancels: 0,
+      comboHeavyCancels: 0,
+      comboSpecialCanceled: false,
+      pendingKnockback: null,
       stun: 0,
       guardStun: 0,
       guardStance: null,
@@ -334,12 +365,29 @@ export class MatchSimulation implements DeterministicSimulation {
 
     const activeMove = this.moveFor(fighter, fighter.activeMoveId);
     if (activeMove) {
+      const cancelMove = this.selectMove(
+        fighter,
+        newlyPressed,
+        fighter.y < GROUND_Y * POSITION_SCALE ? "air" : "ground",
+      );
+      if (cancelMove && this.canComboCancel(fighter, activeMove, cancelMove)) {
+        // 先行技はキャンセル成立のため、保留していたノックバックを破棄する。
+        this.discardPendingKnockback(fighter.player);
+        this.startMove(fighter, cancelMove, true);
+        this.applyPhysics(fighter);
+        fighter.previousButtons = input.buttons;
+        return;
+      }
+
       fighter.actionFrame += 1;
       if (fighter.actionFrame >= this.moveLength(activeMove)) {
+        // キャンセルされず技が終わったため、命中時に保留したノックバックを適用する。
+        this.applyPendingKnockback(fighter.player);
         fighter.activeMoveId = null;
         fighter.action = "idle";
         fighter.actionFrame = 0;
         fighter.attackConnected = false;
+        fighter.comboCancelable = false;
       }
       this.applyPhysics(fighter);
       fighter.previousButtons = input.buttons;
@@ -454,13 +502,79 @@ export class MatchSimulation implements DeterministicSimulation {
     return undefined;
   }
 
-  private startMove(fighter: FighterState, move: MoveDefinition): void {
+  private startMove(
+    fighter: FighterState,
+    move: MoveDefinition,
+    isComboCancel = false,
+  ): void {
     /** 選択済みの技を開始し、命中・飛び道具生成用の状態をリセットする。 */
     fighter.activeMoveId = move.id;
     fighter.action = move.animation;
     fighter.actionFrame = 0;
     fighter.attackConnected = false;
     fighter.projectileSpawned = false;
+    fighter.comboCancelable = false;
+
+    if (!isComboCancel) {
+      // 通常始動では、前のコンボのキャンセル回数を初期化する。
+      fighter.comboLightCancels = 0;
+      fighter.comboHeavyCancels = 0;
+      fighter.comboSpecialCanceled = false;
+      return;
+    }
+
+    // キャンセル先の種別を記録し、弱3回・強2回・必殺1回の上限を守る。
+    if (move.button === InputButton.Light) fighter.comboLightCancels += 1;
+    else if (move.button === InputButton.Heavy) fighter.comboHeavyCancels += 1;
+    else if (move.button === InputButton.Special)
+      fighter.comboSpecialCanceled = true;
+  }
+
+  /** 命中した弱・強から、指定回数内の弱・強または必殺技へキャンセルできるか返す。 */
+  private canComboCancel(
+    fighter: FighterState,
+    activeMove: MoveDefinition,
+    cancelMove: MoveDefinition,
+  ): boolean {
+    if (!fighter.comboCancelable || !this.isComboSourceMove(activeMove)) {
+      return false;
+    }
+    if (cancelMove.button === InputButton.Light) {
+      return fighter.comboLightCancels < COMBO_LIGHT_CANCEL_LIMIT;
+    }
+    if (cancelMove.button === InputButton.Heavy) {
+      return fighter.comboHeavyCancels < COMBO_HEAVY_CANCEL_LIMIT;
+    }
+    return (
+      cancelMove.button === InputButton.Special && !fighter.comboSpecialCanceled
+    );
+  }
+
+  /** 弱・強の近接技だけを、命中後のコンボキャンセル始動技として扱う。 */
+  private isComboSourceMove(move: MoveDefinition): boolean {
+    return (
+      move.attackType === "melee" &&
+      (move.button === InputButton.Light || move.button === InputButton.Heavy)
+    );
+  }
+
+  /** 技が最後まで出た時だけ、相手へ保留済みのノックバックを反映する。 */
+  private applyPendingKnockback(attacker: PlayerId): void {
+    const defender = this.fighters[attacker === 0 ? 1 : 0];
+    const pending = defender.pendingKnockback;
+    if (!pending || pending.attacker !== attacker) return;
+
+    defender.velocityX = pending.velocityX;
+    defender.velocityY = pending.velocityY;
+    defender.pendingKnockback = null;
+  }
+
+  /** 次のコンボ技が出た時に、先行技のノックバックだけを破棄する。 */
+  private discardPendingKnockback(attacker: PlayerId): void {
+    const defender = this.fighters[attacker === 0 ? 1 : 0];
+    if (defender.pendingKnockback?.attacker === attacker) {
+      defender.pendingKnockback = null;
+    }
   }
 
   private moveFor(
@@ -521,8 +635,15 @@ export class MatchSimulation implements DeterministicSimulation {
 
     if (!this.isMeleeInRange(attacker, defender, move)) return;
 
-    this.applyHit(attacker, defender, move, defenderInput);
+    const landed = this.applyHit(
+      attacker,
+      defender,
+      move,
+      defenderInput,
+      this.isComboSourceMove(move),
+    );
     attacker.attackConnected = true;
+    attacker.comboCancelable = landed && this.isComboSourceMove(move);
   }
 
   /** 攻撃者の前方・リーチ・高さが、相手の被弾判定に届いているかを返す。 */
@@ -609,17 +730,22 @@ export class MatchSimulation implements DeterministicSimulation {
       "damage" | "attackLevel" | "knockbackX" | "knockbackY" | "hitstun"
     >,
     defenderInput: FrameInput,
-  ): void {
+    /** 弱・強の命中なら、キャンセル成否までノックバックを保留する。 */
+    deferKnockback = false,
+  ): boolean {
     /** 近接技と飛び道具に共通する上中下ガード、ダメージ、KO処理を適用する。 */
     const guardStance = this.guardStanceFor(defender, attacker, defenderInput);
     const defending =
       guardStance !== null &&
       this.canGuardAttack(guardStance, attack.attackLevel);
     if (!defending) {
+      // 攻撃を受けて先行技が中断された場合は、未キャンセル技のノックバックを確定する。
+      this.applyPendingKnockback(defender.player);
       // 被弾してヒットスタンへ入った時点で、実行中の技の持続判定を止める。
       // 先に被弾した側は同一フレーム後半にも攻撃を出せず、残り持続も発生しない。
       defender.activeMoveId = null;
       defender.attackConnected = false;
+      defender.comboCancelable = false;
     }
     const damage = defending ? 0 : attack.damage;
     defender.health = Math.max(0, defender.health - damage);
@@ -633,12 +759,29 @@ export class MatchSimulation implements DeterministicSimulation {
       // トレーニングの敵体力自動回復は、KO判定より先に即時適用する。
       defender.health = defender.character.maxHealth;
     }
-    defender.velocityX = defending
+    const velocityX = defending
       ? attacker.facing * Math.trunc((attack.knockbackX * POSITION_SCALE) / 180)
       : attacker.facing * Math.trunc((attack.knockbackX * POSITION_SCALE) / 60);
-    defender.velocityY = defending
+    const velocityY = defending
       ? 0
       : -Math.trunc((attack.knockbackY * POSITION_SCALE) / 60);
+    const shouldDeferKnockback =
+      deferKnockback && !defending && defender.health > 0;
+    if (shouldDeferKnockback) {
+      // 弱・強のヒット時は、次のキャンセル入力までノックバックを保留する。
+      defender.pendingKnockback = {
+        attacker: attacker.player,
+        velocityX,
+        velocityY,
+      };
+      defender.velocityX = 0;
+      defender.velocityY = 0;
+    } else {
+      // ガード・必殺技・KOはキャンセル対象外なので、その場でノックバックする。
+      defender.pendingKnockback = null;
+      defender.velocityX = velocityX;
+      defender.velocityY = velocityY;
+    }
     defender.stun = defending ? 0 : attack.hitstun;
     defender.guardStun = defending
       ? Math.max(1, Math.trunc(attack.hitstun / 2))
@@ -656,6 +799,7 @@ export class MatchSimulation implements DeterministicSimulation {
       defender.activeMoveId = null;
       this.finishRound(attacker.player);
     }
+    return !defending;
   }
 
   private applyAirControl(fighter: FighterState, input: FrameInput): void {
