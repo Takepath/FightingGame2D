@@ -14,6 +14,7 @@ import {
   type KeyBindingTarget,
 } from "./input";
 import { OnlineFrameBridge, RoomClient } from "./online";
+import { FIGHTING_GAME_CONFIG } from "./gameConfig";
 import {
   FRAMES_PER_SECOND,
   GROUND_Y,
@@ -441,7 +442,11 @@ export class MatchScreen extends Container {
   public startOnline(client: RoomClient): void {
     if (client.player === null) return;
 
-    this.online = new OnlineFrameBridge(client);
+    // 通信の揺らぎに合わせて入力遅延を可変調整する同期ブリッジを開始する。
+    this.online = new OnlineFrameBridge(
+      client,
+      FIGHTING_GAME_CONFIG.onlineSync,
+    );
     this.onlinePlayer = client.player;
 
     this.synchronizer.reset();
@@ -1023,7 +1028,7 @@ export class MatchScreen extends Container {
       );
     }
     let infoText = this.online
-      ? `ONLINE P${(this.onlinePlayer ?? 0) + 1}  •  後ろ: 立ちガード / ↓+後ろ: しゃがみガード  •  ↓ ↘ → + 必殺技 = 波動拳`
+      ? `ONLINE P${(this.onlinePlayer ?? 0) + 1}  •  INPUT DELAY ${this.online.delayFrames}F  •  後ろ: 立ちガード / ↓+後ろ: しゃがみガード`
       : "Esc > オプション  •  後ろ: 立ちガード / ↓+後ろ: しゃがみガード  •  空中攻撃";
     if (this.training && !this.online) {
       infoText =

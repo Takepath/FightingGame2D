@@ -23,6 +23,29 @@ type SelectionHandler = (characterId: string, color: ColorVariant) => void;
 /** 引数なし通知用コールバック型。 */
 type VoidHandler = () => void;
 
+/** 通信状況に応じて調整する、オンライン入力遅延バッファの設定。 */
+export interface OnlineInputDelayOptions {
+  /** 対戦開始時に確保する入力遅延フレーム数。 */
+  initialFrames: number;
+  /** 遅延が安定している時に下げられる最小フレーム数。 */
+  minFrames: number;
+  /** 受信遅延・揺らぎが大きい時に上げられる最大フレーム数。 */
+  maxFrames: number;
+  /** 安定後に遅延を1フレーム下げるまでの連続フレーム数。 */
+  decreaseAfterStableFrames: number;
+}
+
+/** ngrokなどの中継経路でも先読みを確保しやすい既定値。 */
+const DEFAULT_INPUT_DELAY_OPTIONS: OnlineInputDelayOptions = {
+  initialFrames: 6,
+  minFrames: 3,
+  maxFrames: 15,
+  decreaseAfterStableFrames: 240,
+};
+
+/** 初期バッファに使う、両プレイヤー共通のニュートラル入力。 */
+const NEUTRAL_INPUT: FrameInput = { buttons: 0 };
+
 /** 汎用モジュール上で格闘ゲームが使うイベント名。 */
 const GAME_ROOM_EVENT = {
   input: "fight-input",
@@ -210,11 +233,82 @@ export class OnlineFrameBridge {
   // 相手側の入力履歴
   private readonly remoteInputs = new Map<number, FrameInput>();
 
+  /** 送信済みの自分入力で、最も先のシミュレーションフレーム。 */
+  private highestLocalInputFrame: number;
+
+  /** 受信済みの相手入力で、最も先のシミュレーションフレーム。 */
+  private highestRemoteInputFrame: number;
+
+  /** 既にシミュレーションへ渡したフレーム。遅延到着した古い入力を捨てる。 */
+  private lastConsumedFrame = -1;
+
+  /** 現在適用中の入力遅延フレーム数。 */
+  private inputDelayFrames: number;
+
+  /** 遅延を下げる判断に使う、安定して入力を先読みできた連続フレーム数。 */
+  private stableFrameCount = 0;
+
+  /** 遅延設定を正規化して保持する。 */
+  private readonly delayOptions: OnlineInputDelayOptions;
+
   // RoomClientから相手入力通知を受け取る
-  public constructor(private readonly client: RoomClient) {
+  public constructor(
+    private readonly client: RoomClient,
+    options: Partial<OnlineInputDelayOptions> = {},
+  ) {
+    const minFrames = this.validFrameOption(
+      options.minFrames,
+      DEFAULT_INPUT_DELAY_OPTIONS.minFrames,
+    );
+    const maxFrames = Math.max(
+      minFrames,
+      this.validFrameOption(
+        options.maxFrames,
+        DEFAULT_INPUT_DELAY_OPTIONS.maxFrames,
+      ),
+    );
+    const initialFrames = Math.min(
+      maxFrames,
+      Math.max(
+        minFrames,
+        this.validFrameOption(
+          options.initialFrames,
+          DEFAULT_INPUT_DELAY_OPTIONS.initialFrames,
+        ),
+      ),
+    );
+    this.delayOptions = {
+      initialFrames,
+      minFrames,
+      maxFrames,
+      decreaseAfterStableFrames: this.validFrameOption(
+        options.decreaseAfterStableFrames,
+        DEFAULT_INPUT_DELAY_OPTIONS.decreaseAfterStableFrames,
+      ),
+    };
+    this.inputDelayFrames = initialFrames;
+    this.highestLocalInputFrame = initialFrames - 1;
+    this.highestRemoteInputFrame = initialFrames - 1;
+
+    // 両者が同じ初期ニュートラル区間を使うことで、開始直後の通信待ちを避ける。
+    for (let frame = 0; frame < initialFrames; frame += 1) {
+      this.localInputs.set(frame, { ...NEUTRAL_INPUT });
+      this.remoteInputs.set(frame, { ...NEUTRAL_INPUT });
+    }
+
     client.onInput((frame, buttons) => {
+      if (frame <= this.lastConsumedFrame) return;
       this.remoteInputs.set(frame, { buttons });
+      this.highestRemoteInputFrame = Math.max(
+        this.highestRemoteInputFrame,
+        frame,
+      );
     });
+  }
+
+  /** 現在の通信状況から選ばれた入力遅延フレーム数を返す。 */
+  public get delayFrames(): number {
+    return this.inputDelayFrames;
   }
 
   /** 指定フレームの両者入力が揃った時だけ、プレイヤー番号順で返す。 */
@@ -225,25 +319,96 @@ export class OnlineFrameBridge {
     // プレイヤー番号が未確定なら処理不可
     if (this.client.player === null) return undefined;
 
-    if (!this.localInputs.has(frame)) {
-      const snapshot = { buttons: localInput.buttons };
-      this.localInputs.set(frame, snapshot);
-      this.client.sendInput(frame, snapshot.buttons);
-    }
+    // 現在入力を遅延フレーム数だけ先へ割り当て、ネットワーク到着時間を吸収する。
+    this.scheduleLocalInput(frame, localInput.buttons);
 
     // 指定フレームの双方入力を取得
     const own = this.localInputs.get(frame);
     const remote = this.remoteInputs.get(frame);
 
     // どちらか片方でも未到着なら待機
-    if (!own || !remote) return undefined;
+    if (!own || !remote) {
+      // 実際に待機した場合は、次の入力をさらに先へ送って揺らぎを吸収する。
+      this.increaseDelay();
+      this.stableFrameCount = 0;
+      return undefined;
+    }
 
     this.localInputs.delete(frame);
     this.remoteInputs.delete(frame);
+    this.lastConsumedFrame = frame;
+    this.refreshHighestRemoteInputFrame();
+    this.adjustDelayFromRemoteBuffer(frame);
 
     // プレイヤー番号順に入力を返す
     // Player0なら自分→相手
     // Player1なら相手→自分
     return this.client.player === 0 ? [own, remote] : [remote, own];
+  }
+
+  /** 現在の入力を未来フレームへ連続配置し、遅延増加時のフレーム欠落も防ぐ。 */
+  private scheduleLocalInput(frame: number, buttons: number): void {
+    const targetFrame = frame + this.inputDelayFrames;
+    for (
+      let target = this.highestLocalInputFrame + 1;
+      target <= targetFrame;
+      target += 1
+    ) {
+      const snapshot = { buttons };
+      this.localInputs.set(target, snapshot);
+      this.client.sendInput(target, snapshot.buttons);
+    }
+    this.highestLocalInputFrame = Math.max(
+      this.highestLocalInputFrame,
+      targetFrame,
+    );
+  }
+
+  /** 相手入力の先読み量から、遅延を上げる・安定時に下げる判断を行う。 */
+  private adjustDelayFromRemoteBuffer(frame: number): void {
+    const remoteLead = this.highestRemoteInputFrame - frame;
+    const requiredLead = Math.max(2, Math.ceil(this.inputDelayFrames / 2));
+    if (remoteLead < requiredLead) {
+      this.increaseDelay();
+      this.stableFrameCount = 0;
+      return;
+    }
+
+    this.stableFrameCount += 1;
+    if (
+      this.stableFrameCount >= this.delayOptions.decreaseAfterStableFrames &&
+      this.inputDelayFrames > this.delayOptions.minFrames
+    ) {
+      // 1回に1フレームだけ下げ、未来フレームに割り当て済みの入力を安全に使い切る。
+      this.inputDelayFrames -= 1;
+      this.stableFrameCount = 0;
+    }
+  }
+
+  /** 遅延を上げられる範囲で1フレーム増やす。 */
+  private increaseDelay(): void {
+    this.inputDelayFrames = Math.min(
+      this.delayOptions.maxFrames,
+      this.inputDelayFrames + 1,
+    );
+  }
+
+  /** 消費済み入力を除いた、相手入力の最先端フレームを更新する。 */
+  private refreshHighestRemoteInputFrame(): void {
+    let highest = this.lastConsumedFrame;
+    for (const frame of this.remoteInputs.keys()) {
+      if (frame > highest) highest = frame;
+    }
+    this.highestRemoteInputFrame = highest;
+  }
+
+  /** 正の整数フレーム設定だけを採用し、不正値は既定値へ戻す。 */
+  private validFrameOption(
+    value: number | undefined,
+    fallback: number,
+  ): number {
+    return typeof value === "number" && Number.isInteger(value) && value > 0
+      ? value
+      : fallback;
   }
 }
