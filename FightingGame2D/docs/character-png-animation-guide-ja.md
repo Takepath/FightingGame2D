@@ -205,7 +205,7 @@ river_guard,RIVER GUARD,blender,data/animations/river_guard.json,data/characters
 | `animation_asset`                | JSONへの公開パス。                                       |
 | `icon_asset`                     | 選択画面のアイコンPNGへの公開パス。                      |
 | `primary_color` / `accent_color` | `#RRGGBB`形式の基本色・差し色。                          |
-| `max_health`                     | 最大体力。                                               |
+| `max_health`                     | 最大体力。`damage` と同じ実数HPポイントで指定します。    |
 | `walk_speed`                     | 前歩き速度。                                             |
 | `jump_velocity`                  | ジャンプ初速度。                                         |
 | `hurtbox_width`                  | 被弾判定の横幅。                                         |
@@ -219,31 +219,34 @@ river_guard,RIVER GUARD,blender,data/animations/river_guard.json,data/characters
 `public/data/moves.csv` に固有技を追加します。**同じ `move_id` を持つ共通技（`character_id=all`）より前**に固有技を置くと、キャラクター固有の値が優先されます。
 
 ```csv
-river_guard,light,light,5,3,13,8,68,58,280,0,17,light,melee,0,0,ground,mid,
-river_guard,heavy,heavy,11,5,20,18,96,70,560,520,34,heavy,melee,0,0,ground,high,
-river_guard,special,special,14,7,25,24,106,46,710,260,40,special,melee,0,0,ground,low,
-river_guard,river_shot,special,10,2,28,11,0,0,390,220,27,special,projectile,700,105,ground,mid,river_shot
+river_guard,light,light,5,3,13,800,0,false,0,68,58,0,0,280,0,17,light,melee,0,0,ground,mid,,
+river_guard,heavy,heavy,11,5,20,1800,0,false,0,96,70,0,0,560,520,34,heavy,melee,0,0,ground,high,,
+river_guard,special,special,14,7,25,2400,25,false,0,106,46,0,0,710,260,40,special,melee,0,0,ground,low,,
+river_guard,river_shot,special,10,2,28,1100,25,false,0,0,0,0,0,390,220,27,special,projectile,700,105,ground,mid,river_shot,
 ```
 
 `moves.csv` の主要列は次のとおりです。
 
-| 列                                         | 内容                                                               |
-| ------------------------------------------ | ------------------------------------------------------------------ |
-| `character_id`                             | この技を使えるキャラクターID。全員共通は `all`。                   |
-| `move_id`                                  | 技ID。キャラクター内で重複させません。                             |
-| `button`                                   | `light`、`heavy`、`special`。                                      |
-| `startup` / `active` / `recovery`          | 発生・持続・硬直。すべて60FPS固定フレームです。                    |
-| `damage`                                   | ダメージ。                                                         |
-| `range_x` / `range_y`                      | 近接技の前方リーチ・上下判定。                                     |
-| `self_move_x` / `self_move_y`              | 技開始時に自分へ与える前方・上方向の速度（px/秒）。正のY値は上昇。 |
-| `knockback_x` / `knockback_y`              | 命中時の横・縦方向の吹き飛び。                                     |
-| `hitstun`                                  | 命中時の硬直フレーム。                                             |
-| `animation`                                | JSONのアクション名。`light`・`heavy`・`special`など。              |
-| `attack_type`                              | `melee` または `projectile`。                                      |
-| `projectile_speed` / `projectile_lifetime` | 飛び道具の速度・生存フレーム。近接技は `0`。                       |
-| `use_state`                                | `ground`、`air`、`any`。                                           |
-| `attack_level`                             | `high`、`mid`、`low`。                                             |
-| `command_id`                               | `commands.csv` のID。ボタンだけで出す技は空欄。                    |
+| 列                                         | 内容                                                                |
+| ------------------------------------------ | ------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `character_id`                             | この技を使えるキャラクターID。全員共通は `all`。                    |
+| `move_id`                                  | 技ID。キャラクター内で重複させません。                              |
+| `button`                                   | `light`、`heavy`、`special`、`throw`。                              |
+| `startup` / `active` / `recovery`          | 発生・持続・硬直。すべて60FPS固定フレームです。                     |
+| `damage`                                   | ダメージ。`500` を指定すると500ダメージとなり、割合換算はしません。 |
+| `special_gauge_cost`                       | 必殺技ゲージの消費量。0〜100の整数で、残量不足時は技を出せません。  |
+| `guard_bleak`                              | `true` ならガードを貫通、`false` なら上中下属性に従ってガード可能。 |
+| `starter_proration`                        | 始動補正率。`20`なら120%、`-10`なら90%からコンボ減衰を開始します。  |
+| `range_x` / `range_y`                      | 近接技の前方リーチ・上下判定。                                      |
+| `self_move_x` / `self_move_y`              | 技開始時に自分へ与える前方・上方向の速度（px/秒）。正のY値は上昇。  |
+| `knockback_x` / `knockback_y`              | 命中時の横・縦方向の吹き飛び。                                      |
+| `hitstun`                                  | 命中時の硬直フレーム。                                              |
+| `animation`                                | JSONのアクション名。`light`・`heavy`・`special`など。               |
+| `attack_type`                              | `melee` または `projectile`。                                       |
+| `projectile_speed` / `projectile_lifetime` | 飛び道具の速度・生存フレーム。近接技は `0`。                        |
+| `use_state`                                | `ground`、`air`、`any`。                                            |
+| `attack_level`                             | `high`、`mid`、`low`。                                              |
+| `command_id`                               | `commands.csv` のID。複数指定は `                                   | ` 区切りで、いずれかの入力で発動。ボタンだけで出す技は空欄。 |
 
 ガード属性は、`high` が立ちガードのみ、`low` がしゃがみガードのみ、`mid` が両方でガード可能です。ガード成功時のダメージは0です。
 
@@ -301,15 +304,15 @@ git diff --check
 
 ## 10. よくある問題
 
-| 症状                             | 原因と解決                                                                                                                        |
-| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| 選択画面にアイコンが出ない       | `icon_asset` は `public` 配下からの相対パスです。拡張子・大文字小文字・`/`区切りを確認します。                                    |
-| 棒人間で表示される               | `render_type=blender`、`animation_asset` のパス、JSON構文、PNGのパスを確認します。ブラウザーの開発者ツールのNetworkも確認します。 |
-| 足が浮く・地面に埋まる           | 全フレームの足元をそろえ、JSONの `anchor[1]` を調整します。                                                                       |
-| 名前がキャラクターに重なる       | `nameplateY` をより小さい値にします。例: `-184` → `-220`。                                                                        |
-| 固有技ではなく共通技の性能になる | `moves.csv` の固有行を `all` 行より前へ移動し、`character_id` と `move_id` を確認します。                                         |
-| コマンド技が出ない               | `commands.csv` の `command_id`、テンキー表記、`max_frames`、`moves.csv` の `command_id` を確認します。                            |
-| 連番PNGが切り替わらない          | 現行版の仕様です。JSONのポーズ補正で表現するか、連番PNG切替機能を実装してください。                                               |
+| 症状                             | 原因と解決                                                                                                                                              |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 選択画面にアイコンが出ない       | `icon_asset` は `public` 配下からの相対パスです。拡張子・大文字小文字・`/`区切りを確認します。                                                          |
+| 棒人間で表示される               | `render_type=blender`、`animation_asset` のパス、JSON構文、PNGのパスを確認します。ブラウザーの開発者ツールのNetworkも確認します。                       |
+| 足が浮く・地面に埋まる           | 全フレームの足元をそろえ、JSONの `anchor[1]` を調整します。                                                                                             |
+| 名前がキャラクターに重なる       | `nameplateY` をより小さい値にします。例: `-184` → `-220`。                                                                                              |
+| 固有技ではなく共通技の性能になる | `moves.csv` の固有行を `all` 行より前へ移動し、`character_id` と `move_id` を確認します。                                                               |
+| コマンド技が出ない               | `commands.csv` の `command_id`、テンキー表記、`max_frames`、最後の方向入力から技ボタンまでが2フレーム以内か、`moves.csv` の `command_id` を確認します。 |
+| 連番PNGが切り替わらない          | 現行版の仕様です。JSONのポーズ補正で表現するか、連番PNG切替機能を実装してください。                                                                     |
 
 ## 付録: Blender Armatureを使う場合
 

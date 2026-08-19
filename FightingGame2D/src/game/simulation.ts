@@ -26,12 +26,36 @@ const AIR_DRAG_PERCENT = 97;
 const PUSHBOX_PADDING = 8 * POSITION_SCALE;
 const ATTACK_CENTER_FROM_GROUND = 86 * POSITION_SCALE;
 const PROJECTILE_HITBOX_RADIUS = 14 * POSITION_SCALE;
+/** 投げ成功時、投げた側を通常技の最大リーチ外へ退かせる距離。 */
+const THROW_SELF_KNOCKBACK_DISTANCE = 320 * POSITION_SCALE;
+/** 投げ抜け時に両者を離す距離。 */
+const THROW_TECH_KNOCKBACK_DISTANCE = 120 * POSITION_SCALE;
+/** 投げ抜け時に両者へ与える横方向のノックバック速度。 */
+const THROW_TECH_KNOCKBACK_SPEED = (780 * POSITION_SCALE) / 60;
 /** ガード解除や技選択で扱う、全攻撃ボタンのビット集合。 */
 const ATTACK_BUTTON_MASK =
-  InputButton.Light | InputButton.Heavy | InputButton.Special;
+  InputButton.Light |
+  InputButton.Heavy |
+  InputButton.Special |
+  InputButton.Throw;
+
+/** 攻撃とジャンプを、行動可能になる直前に受け付ける先行入力の対象とする。 */
+const BUFFERABLE_ACTION_BUTTON_MASK = ATTACK_BUTTON_MASK | InputButton.Up;
+
+/** 押下後に行動可能になるまで受け付ける、先行入力の固定フレーム数。 */
+export const INPUT_BUFFER_FRAMES = 5;
+
+/** コマンドの最後の方向入力後に、技ボタンを受け付ける固定猶予フレーム数。 */
+const COMMAND_BUTTON_GRACE_FRAMES = 2;
 
 /** 固定60FPSを秒数へ換算するためのフレーム数。 */
 export const FRAMES_PER_SECOND = 60;
+
+/** 必殺技ゲージの最大値。HUDとCSVの消費量もこの値を上限にする。 */
+export const MAX_SPECIAL_GAUGE = 100;
+
+/** 必殺技ゲージを1ポイント回復するまでの固定フレーム数（毎秒1ポイント）。 */
+const SPECIAL_GAUGE_RECOVERY_FRAMES = FRAMES_PER_SECOND;
 
 /** 1試合は最大3ラウンドで決着する。 */
 export const MAX_ROUNDS = 3;
@@ -48,11 +72,11 @@ export const ROUND_INTRO_FRAMES = FRAMES_PER_SECOND * 2;
 /** ラウンド勝者を表示してから次のラウンドへ進む時間（固定フレーム）。 */
 const ROUND_RESULT_FRAMES = FRAMES_PER_SECOND * 4;
 
-/** 1コンボ中にキャンセル先として選べる弱攻撃の最大回数。 */
-const COMBO_LIGHT_CANCEL_LIMIT = 3;
+/** 初段を含めて弱攻撃を3HITまでにするため、初段後に選べる弱攻撃の最大回数。 */
+const COMBO_LIGHT_CANCEL_LIMIT = 2;
 
-/** 1コンボ中にキャンセル先として選べる強攻撃の最大回数。 */
-const COMBO_HEAVY_CANCEL_LIMIT = 2;
+/** 初段を含めて強攻撃を2HITまでにするため、初段後に選べる強攻撃の最大回数。 */
+const COMBO_HEAVY_CANCEL_LIMIT = 1;
 
 /** 弱・強を種類ごとに切り替えても超えられない、通常技キャンセルの総数。 */
 const COMBO_NORMAL_CANCEL_LIMIT =
@@ -71,6 +95,26 @@ interface PendingKnockback {
   readonly velocityY: number;
 }
 
+/** トレーニングの判定表示に渡す、ステージ座標系の矩形。 */
+export interface CollisionDebugBox {
+  /** 矩形の左上X座標（ピクセル）。 */
+  readonly x: number;
+  /** 矩形の左上Y座標（ピクセル）。 */
+  readonly y: number;
+  /** 矩形の横幅（ピクセル）。 */
+  readonly width: number;
+  /** 矩形の高さ（ピクセル）。 */
+  readonly height: number;
+}
+
+/** 1キャラクター分の被弾・攻撃判定表示情報。 */
+export interface FighterCollisionDebug {
+  /** characters.csv の被弾判定。 */
+  readonly hurtbox: CollisionDebugBox;
+  /** 現在の有効フレーム中にだけ存在する、近接攻撃の判定。 */
+  readonly attackbox: CollisionDebugBox | null;
+}
+
 export interface FighterState {
   /** 固定小数点座標で保持する、各プレイヤーの決定論的な戦闘状態。 */
   readonly player: PlayerId;
@@ -81,11 +125,25 @@ export interface FighterState {
   velocityY: number;
   facing: -1 | 1;
   health: number;
+  /** 最大100で管理する必殺技ゲージ。 */
+  specialGauge: number;
+  /** 必殺技ゲージを1ポイント回復するまでに経過した固定フレーム数。 */
+  specialGaugeRecoveryFrames: number;
   action: FighterAction;
   actionFrame: number;
   activeMoveId: string | null;
+  /** 現在の技で既に処理した攻撃判定の持続フレーム数。 */
+  activeFramesResolved: number;
   attackConnected: boolean;
   projectileSpawned: boolean;
+  /** 投げを開始した瞬間の相手基準の方向。-1:後ろ、0:ニュートラル、1:前。 */
+  throwDirection: -1 | 0 | 1;
+  /** 現在の被コンボ段数。1は始動ヒット、2以上をCOMBO表示する。 */
+  comboHitCount: number;
+  /** 現在のコンボを始動したプレイヤー。コンボ外ではnull。 */
+  comboStarterPlayer: PlayerId | null;
+  /** 始動技のCSV補正率。段数ごとの減衰へ加算して使用する。 */
+  comboStarterProration: number;
   /** 命中した弱・強から、次の攻撃へキャンセルできる状態か。 */
   comboCancelable: boolean;
   /** 現在のコンボでキャンセル先に選んだ弱攻撃の回数。 */
@@ -96,6 +154,8 @@ export interface FighterState {
   comboNormalCancels: number;
   /** 現在のコンボで必殺技キャンセルを使用済みか。 */
   comboSpecialCanceled: boolean;
+  /** 現在のコンボで投げキャンセルを使用済みか。 */
+  comboThrowCanceled: boolean;
   /** キャンセルされなかった時だけ適用する、保留中のノックバック。 */
   pendingKnockback: PendingKnockback | null;
   stun: number;
@@ -104,6 +164,8 @@ export interface FighterState {
   /** 現在のガード硬直で維持する立ち・しゃがみ姿勢。 */
   guardStance: GuardStance | null;
   previousButtons: number;
+  /** 押下フレームから5フレーム先までの攻撃・ジャンプ押下を保持する先行入力履歴。 */
+  bufferedActionHistory: number[];
   inputHistory: number[];
 }
 
@@ -117,6 +179,10 @@ export interface ProjectileState {
   velocityX: number;
   life: number;
   damage: number;
+  /** true の飛び道具は後ろ入力ガードを無視してダメージを与える。 */
+  guardPiercing: boolean;
+  /** 飛び道具を出した技のコンボ始動補正率。 */
+  starterProration: number;
   /** 飛び道具にも適用する上・中・下属性。 */
   attackLevel: AttackLevel;
   knockbackX: number;
@@ -254,6 +320,20 @@ export class MatchSimulation implements DeterministicSimulation {
     if (this.training) this.trainingAutoRecovery = enabled;
   }
 
+  /**
+   * トレーニング用に、現在の被弾判定と有効フレーム中の近接攻撃判定を返す。
+   * 描画専用の読み取り処理であり、決定論的なゲーム状態は変更しない。
+   */
+  public getCollisionDebugBoxes(): readonly [
+    FighterCollisionDebug,
+    FighterCollisionDebug,
+  ] {
+    return [
+      this.createCollisionDebug(this.fighters[0], this.fighters[1]),
+      this.createCollisionDebug(this.fighters[1], this.fighters[0]),
+    ];
+  }
+
   private createFighter(player: PlayerId): FighterState {
     /** CSV能力値とプレイヤー番号から、ラウンド開始位置のファイターを作る。 */
     const character = this.characters[player];
@@ -266,22 +346,93 @@ export class MatchSimulation implements DeterministicSimulation {
       velocityY: 0,
       facing: player === 0 ? 1 : -1,
       health: character.maxHealth,
+      // ラウンド開始時は、両者の必殺技ゲージを最大値から開始する。
+      specialGauge: MAX_SPECIAL_GAUGE,
+      specialGaugeRecoveryFrames: 0,
       action: "idle",
       actionFrame: 0,
       activeMoveId: null,
+      activeFramesResolved: 0,
       attackConnected: false,
       projectileSpawned: false,
+      throwDirection: 0,
+      comboHitCount: 0,
+      comboStarterPlayer: null,
+      comboStarterProration: 0,
       comboCancelable: false,
       comboLightCancels: 0,
       comboHeavyCancels: 0,
       comboNormalCancels: 0,
       comboSpecialCanceled: false,
+      comboThrowCanceled: false,
       pendingKnockback: null,
       stun: 0,
       guardStun: 0,
       guardStance: null,
       previousButtons: 0,
+      bufferedActionHistory: [],
       inputHistory: [],
+    };
+  }
+
+  /** 1キャラクター分の判定表示情報を、実際の判定式と同じ座標系で組み立てる。 */
+  private createCollisionDebug(
+    fighter: FighterState,
+    opponent: FighterState,
+  ): FighterCollisionDebug {
+    const centerX = fighter.x / POSITION_SCALE;
+    const groundY = fighter.y / POSITION_SCALE;
+    const hurtbox = {
+      x: centerX - fighter.character.hurtboxWidth / 2,
+      y: groundY - fighter.character.hurtboxTop,
+      width: fighter.character.hurtboxWidth,
+      height: fighter.character.hurtboxTop - fighter.character.hurtboxBottom,
+    };
+    const move = this.moveFor(fighter, fighter.activeMoveId);
+    if (
+      !move ||
+      move.attackType !== "melee" ||
+      !this.isMoveInActiveFrame(fighter, move)
+    ) {
+      return { hurtbox, attackbox: null };
+    }
+
+    if (move.button === InputButton.Throw) {
+      // 投げはリーチではなく、両者の押し込み判定が接触する範囲で成立する。
+      const horizontalRadius =
+        (this.hurtboxHalfWidth(fighter) +
+          this.hurtboxHalfWidth(opponent) +
+          PUSHBOX_PADDING * 2) /
+        POSITION_SCALE;
+      const verticalRadius = PASS_THROUGH_HEIGHT / POSITION_SCALE;
+      return {
+        hurtbox,
+        attackbox: {
+          x: centerX - horizontalRadius,
+          y: groundY - verticalRadius,
+          width: horizontalRadius * 2,
+          height: verticalRadius * 2,
+        },
+      };
+    }
+
+    // 通常の近接技は、自分の被弾判定前端から押し込み余白とrange_x/range_yへ伸びる箱として表示する。
+    // この青箱と相手の赤箱が重なる範囲を、横方向の命中可能範囲と一致させる。
+    const pushboxFront =
+      centerX +
+      (fighter.facing * this.hurtboxHalfWidth(fighter)) / POSITION_SCALE;
+    const attackWidth = Math.max(
+      1,
+      move.rangeX + (PUSHBOX_PADDING * 2) / POSITION_SCALE,
+    );
+    return {
+      hurtbox,
+      attackbox: {
+        x: fighter.facing === 1 ? pushboxFront : pushboxFront - attackWidth,
+        y: groundY - ATTACK_CENTER_FROM_GROUND / POSITION_SCALE - move.rangeY,
+        width: attackWidth,
+        height: Math.max(1, move.rangeY * 2),
+      },
     };
   }
 
@@ -316,6 +467,9 @@ export class MatchSimulation implements DeterministicSimulation {
       return false;
     }
 
+    // 持続済みのフレーム数がactiveに達した技は、次フレームの命中候補にしない。
+    if (attacker.activeFramesResolved >= move.active) return false;
+
     const nextActionFrame = attacker.actionFrame + 1;
     if (
       nextActionFrame < move.startup ||
@@ -349,24 +503,27 @@ export class MatchSimulation implements DeterministicSimulation {
 
   private updateFighter(fighter: FighterState, input: FrameInput): void {
     /** 1人分の入力を移動・ジャンプ・通常技・硬直へ反映する。 */
-    this.recordInput(fighter, input.buttons);
     if (fighter.action === "ko") {
       fighter.previousButtons = input.buttons;
       return;
     }
-    const newlyPressed = input.buttons & ~fighter.previousButtons;
-
-    if (fighter.stun > 0) {
-      fighter.stun -= 1;
-      fighter.action = "hit";
-      fighter.actionFrame += 1;
-      this.applyPhysics(fighter);
-      fighter.previousButtons = input.buttons;
+    // 入力可否・被弾状態にかかわらず、対戦が進行している毎フレームでゲージを回復する。
+    this.recoverSpecialGauge(fighter);
+    // コンボ確定中は入力履歴も含めて破棄し、ガード・無敵技・先行入力を一切受け付けない。
+    if (this.isComboLocked(fighter)) {
+      this.updateComboLockedFighter(fighter, input);
       return;
     }
+    this.clearComboState(fighter);
+    this.recordInput(fighter, input.buttons);
+    const newlyPressed = input.buttons & ~fighter.previousButtons;
+    // 行動できない間の攻撃・ジャンプも、5フレーム先まで実行候補として保持する。
+    this.recordBufferedActions(fighter, newlyPressed);
+    const bufferedActions = this.bufferedActionsFor(fighter);
+    const bufferedAttackButtons = bufferedActions & ATTACK_BUTTON_MASK;
 
     if (fighter.guardStun > 0) {
-      if ((newlyPressed & ATTACK_BUTTON_MASK) !== 0) {
+      if (bufferedAttackButtons !== 0) {
         // 攻撃ボタンを押したらガード硬直を解除し、同じ入力で攻撃開始を許可する。
         fighter.guardStun = 0;
         fighter.guardStance = null;
@@ -387,13 +544,15 @@ export class MatchSimulation implements DeterministicSimulation {
     if (activeMove) {
       const cancelMove = this.selectMove(
         fighter,
-        newlyPressed,
+        bufferedAttackButtons,
         fighter.y < GROUND_Y * POSITION_SCALE ? "air" : "ground",
       );
       if (cancelMove && this.canComboCancel(fighter, activeMove, cancelMove)) {
+        // 次のキャンセル技の発生まで被撃側を確定状態に保ち、連打技も連続ヒットにする。
+        this.extendComboHitstunForCancel(fighter, cancelMove);
         // 先行技はキャンセル成立のため、保留していたノックバックを破棄する。
         this.discardPendingKnockback(fighter.player);
-        this.startMove(fighter, cancelMove, true);
+        this.startMove(fighter, cancelMove, true, input.buttons);
         this.applyPhysics(fighter);
         fighter.previousButtons = input.buttons;
         return;
@@ -401,9 +560,10 @@ export class MatchSimulation implements DeterministicSimulation {
 
       fighter.actionFrame += 1;
       if (fighter.actionFrame >= this.moveLength(activeMove)) {
-        // キャンセルされず技が終わったため、命中時に保留したノックバックを適用する。
-        this.applyPendingKnockback(fighter.player);
+        // 保留ノックバックは被撃側のヒットスタン終了時に適用する。
+        // ここで適用すると、後順の相手入力更新が速度を上書きするため行わない。
         fighter.activeMoveId = null;
+        fighter.activeFramesResolved = 0;
         fighter.action = "idle";
         fighter.actionFrame = 0;
         fighter.attackConnected = false;
@@ -415,9 +575,13 @@ export class MatchSimulation implements DeterministicSimulation {
     }
 
     if (fighter.y < GROUND_Y * POSITION_SCALE) {
-      const selectedMove = this.selectMove(fighter, newlyPressed, "air");
+      const selectedMove = this.selectMove(
+        fighter,
+        bufferedAttackButtons,
+        "air",
+      );
       if (selectedMove) {
-        this.startMove(fighter, selectedMove);
+        this.startMove(fighter, selectedMove, false, input.buttons);
         this.applyPhysics(fighter);
         fighter.previousButtons = input.buttons;
         return;
@@ -430,7 +594,9 @@ export class MatchSimulation implements DeterministicSimulation {
       return;
     }
 
-    if ((newlyPressed & InputButton.Up) !== 0) {
+    if ((bufferedActions & InputButton.Up) !== 0) {
+      // 先行入力で記録したジャンプは、実行した時点で消費する。
+      this.consumeBufferedActions(fighter, InputButton.Up);
       const direction = this.horizontalDirection(input);
       if (direction !== 0) {
         fighter.velocityX =
@@ -445,9 +611,13 @@ export class MatchSimulation implements DeterministicSimulation {
       return;
     }
 
-    const selectedMove = this.selectMove(fighter, newlyPressed, "ground");
+    const selectedMove = this.selectMove(
+      fighter,
+      bufferedAttackButtons,
+      "ground",
+    );
     if (selectedMove) {
-      this.startMove(fighter, selectedMove);
+      this.startMove(fighter, selectedMove, false, input.buttons);
       fighter.previousButtons = input.buttons;
       return;
     }
@@ -469,6 +639,58 @@ export class MatchSimulation implements DeterministicSimulation {
     fighter.actionFrame += 1;
     this.applyPhysics(fighter);
     fighter.previousButtons = input.buttons;
+  }
+
+  /** ヒットスタン中、または空中で被弾姿勢の間をコンボ確定状態として扱う。 */
+  private isComboLocked(fighter: FighterState): boolean {
+    return (
+      fighter.stun > 0 ||
+      (fighter.action === "hit" &&
+        (fighter.y < GROUND_Y * POSITION_SCALE || fighter.velocityY < 0))
+    );
+  }
+
+  /** コンボ確定状態の入力を無効化し、被弾・空中落下だけを更新する。 */
+  private updateComboLockedFighter(
+    fighter: FighterState,
+    input: FrameInput,
+  ): void {
+    fighter.bufferedActionHistory.length = 0;
+    fighter.inputHistory.length = 0;
+    const pendingAttacker = fighter.pendingKnockback?.attacker;
+    const releasePendingBeforePhysics =
+      fighter.stun === 1 &&
+      fighter.y >= GROUND_Y * POSITION_SCALE &&
+      pendingAttacker !== undefined;
+    if (fighter.stun > 0) fighter.stun -= 1;
+    fighter.action = "hit";
+    fighter.actionFrame += 1;
+    if (releasePendingBeforePhysics && pendingAttacker !== undefined) {
+      // 攻撃側のキャンセル受付後、最終ヒットの横・縦速度を物理更新より先に反映する。
+      // これによりP1/P2の更新順に依存せず、同フレームからノックバックが移動へ反映される。
+      this.applyPendingKnockback(pendingAttacker);
+    }
+    this.applyPhysics(fighter);
+    if (
+      !releasePendingBeforePhysics &&
+      fighter.stun === 0 &&
+      fighter.y >= GROUND_Y * POSITION_SCALE &&
+      fighter.pendingKnockback !== null
+    ) {
+      // 最終段がキャンセルされなかった時だけ、硬直終了と同時にノックバックを開始する。
+      // この位置なら同フレームの入力処理によって横速度が上書きされない。
+      this.applyPendingKnockback(fighter.pendingKnockback.attacker);
+      // 空中やられが着地した直後も、ノックバックを適用したフレームから移動させる。
+      this.applyPhysics(fighter);
+    }
+    fighter.previousButtons = input.buttons;
+  }
+
+  /** コンボ確定状態を抜けたファイターの段数・始動補正を消去する。 */
+  private clearComboState(fighter: FighterState): void {
+    fighter.comboHitCount = 0;
+    fighter.comboStarterPlayer = null;
+    fighter.comboStarterProration = 0;
   }
 
   private applyPhysics(fighter: FighterState): void {
@@ -495,17 +717,20 @@ export class MatchSimulation implements DeterministicSimulation {
 
   private selectMove(
     fighter: FighterState,
-    newlyPressed: number,
+    attackButtons: number,
     useState: MoveUseState,
   ): MoveDefinition | undefined {
-    /** 新規押下と現在の地上・空中状態から、CSVコマンド技を優先して選ぶ。 */
+    /** 現在または先行入力の攻撃ボタンと地上・空中状態から、CSVコマンド技を優先して選ぶ。 */
     const candidates = this.movesByCharacter.get(fighter.character.id) ?? [];
     for (const move of candidates) {
       if (
         (move.useState === "any" || move.useState === useState) &&
-        move.commandId !== null &&
-        this.matchesCommand(fighter, move.commandId) &&
-        (newlyPressed & move.button) !== 0
+        move.commandIds.length > 0 &&
+        this.hasSpecialGaugeForMove(fighter, move) &&
+        move.commandIds.some((commandId) =>
+          this.matchesCommand(fighter, commandId),
+        ) &&
+        (attackButtons & move.button) !== 0
       ) {
         return move;
       }
@@ -513,8 +738,9 @@ export class MatchSimulation implements DeterministicSimulation {
     for (const move of candidates) {
       if (
         (move.useState === "any" || move.useState === useState) &&
-        move.commandId === null &&
-        (newlyPressed & move.button) !== 0
+        move.commandIds.length === 0 &&
+        this.hasSpecialGaugeForMove(fighter, move) &&
+        (attackButtons & move.button) !== 0
       ) {
         return move;
       }
@@ -526,13 +752,24 @@ export class MatchSimulation implements DeterministicSimulation {
     fighter: FighterState,
     move: MoveDefinition,
     isComboCancel = false,
+    inputButtons = 0,
   ): void {
     /** 選択済みの技を開始し、命中・飛び道具生成用の状態をリセットする。 */
+    // 技を開始したフレームにだけCSV指定の必殺技ゲージを消費する。
+    fighter.specialGauge -= move.specialGaugeCost;
+    // 実行した技の攻撃ボタンは先行入力履歴から消費し、同じ押下の再実行を防ぐ。
+    this.consumeBufferedActions(fighter, move.button);
     fighter.activeMoveId = move.id;
+    fighter.activeFramesResolved = 0;
     fighter.action = move.animation;
     fighter.actionFrame = 0;
     fighter.attackConnected = false;
     fighter.projectileSpawned = false;
+    // 投げ方向は入力開始時に確定し、10Fの発生中にキーを離しても変化させない。
+    fighter.throwDirection =
+      move.button === InputButton.Throw
+        ? this.throwDirectionFor(fighter, inputButtons)
+        : 0;
     fighter.comboCancelable = false;
     this.applySelfMove(fighter, move);
 
@@ -542,18 +779,22 @@ export class MatchSimulation implements DeterministicSimulation {
       fighter.comboHeavyCancels = 0;
       fighter.comboNormalCancels = 0;
       fighter.comboSpecialCanceled = false;
+      fighter.comboThrowCanceled = false;
       return;
     }
 
-    // キャンセル先の種別を記録し、弱3回・強2回・必殺1回の上限を守る。
+    // キャンセル先の種別を記録し、弱3回・強2回・必殺1回・投げ1回の上限を守る。
     if (move.button === InputButton.Light) {
       fighter.comboLightCancels += 1;
       fighter.comboNormalCancels += 1;
     } else if (move.button === InputButton.Heavy) {
       fighter.comboHeavyCancels += 1;
       fighter.comboNormalCancels += 1;
-    } else if (move.button === InputButton.Special)
+    } else if (move.button === InputButton.Special) {
       fighter.comboSpecialCanceled = true;
+    } else if (move.button === InputButton.Throw) {
+      fighter.comboThrowCanceled = true;
+    }
   }
 
   /** CSVのself_move_x/yを、向きと60FPS固定フレームに合わせて自分へ適用する。 */
@@ -571,7 +812,35 @@ export class MatchSimulation implements DeterministicSimulation {
     }
   }
 
-  /** 命中した弱・強から、指定回数内の弱・強または必殺技へキャンセルできるか返す。 */
+  /** 技のCSV消費量を支払える残量があるかを返す。 */
+  private hasSpecialGaugeForMove(
+    fighter: FighterState,
+    move: MoveDefinition,
+  ): boolean {
+    return fighter.specialGauge >= move.specialGaugeCost;
+  }
+
+  /** 最大値未満の必殺技ゲージを、60FPS固定で毎秒1ポイント回復する。 */
+  private recoverSpecialGauge(fighter: FighterState): void {
+    if (fighter.specialGauge >= MAX_SPECIAL_GAUGE) {
+      // 満タン中の端数を残さず、消費後に正確に1秒で次の1ポイントを回復する。
+      fighter.specialGaugeRecoveryFrames = 0;
+      return;
+    }
+
+    fighter.specialGaugeRecoveryFrames += 1;
+    if (fighter.specialGaugeRecoveryFrames < SPECIAL_GAUGE_RECOVERY_FRAMES) {
+      return;
+    }
+
+    fighter.specialGauge = Math.min(
+      MAX_SPECIAL_GAUGE,
+      fighter.specialGauge + 1,
+    );
+    fighter.specialGaugeRecoveryFrames = 0;
+  }
+
+  /** 命中技から、moves.csvのcancel_intoで許可された種別へキャンセルできるか返す。 */
   private canComboCancel(
     fighter: FighterState,
     activeMove: MoveDefinition,
@@ -580,9 +849,13 @@ export class MatchSimulation implements DeterministicSimulation {
     if (!fighter.comboCancelable || !this.isComboSourceMove(activeMove)) {
       return false;
     }
+    const defender = this.fighters[fighter.player === 0 ? 1 : 0];
+    // キャンセルは相手がヒットスタン中、または空中やられ中に限る。
+    // 硬直終了後の遅い入力で保留ノックバックを取り消さないようにする。
+    if (!this.isComboContinuation(fighter, defender)) return false;
+    // キャンセル先は、実行中の技のCSV設定に登録された種別だけに限定する。
+    if (!activeMove.cancelInto.includes(cancelMove.button)) return false;
     if (cancelMove.button === InputButton.Light) {
-      // 強攻撃から弱攻撃へ戻る逆順キャンセルを禁止し、弱・強の交互連打を防ぐ。
-      if (activeMove.button === InputButton.Heavy) return false;
       return (
         fighter.comboNormalCancels < COMBO_NORMAL_CANCEL_LIMIT &&
         fighter.comboLightCancels < COMBO_LIGHT_CANCEL_LIMIT
@@ -594,20 +867,36 @@ export class MatchSimulation implements DeterministicSimulation {
         fighter.comboHeavyCancels < COMBO_HEAVY_CANCEL_LIMIT
       );
     }
+    if (cancelMove.button === InputButton.Special) {
+      return !fighter.comboSpecialCanceled;
+    }
     return (
-      cancelMove.button === InputButton.Special && !fighter.comboSpecialCanceled
+      cancelMove.button === InputButton.Throw && !fighter.comboThrowCanceled
     );
   }
 
-  /** 弱・強の近接技だけを、命中後のコンボキャンセル始動技として扱う。 */
+  /** cancel_intoを持つ近接技だけを、命中後のコンボキャンセル始動技として扱う。 */
   private isComboSourceMove(move: MoveDefinition): boolean {
-    return (
-      move.attackType === "melee" &&
-      (move.button === InputButton.Light || move.button === InputButton.Heavy)
-    );
+    return move.attackType === "melee" && move.cancelInto.length > 0;
   }
 
-  /** 技が最後まで出た時だけ、相手へ保留済みのノックバックを反映する。 */
+  /**
+   * 命中済みの通常技をキャンセルした場合、次の技の発生フレームまで被撃側を確定状態に保つ。
+   * ガードされた技は被撃状態ではないため、ガード硬直を延長しない。
+   */
+  private extendComboHitstunForCancel(
+    attacker: FighterState,
+    cancelMove: MoveDefinition,
+  ): void {
+    const defender = this.fighters[attacker.player === 0 ? 1 : 0];
+    if (!this.isComboContinuation(attacker, defender)) return;
+
+    // キャンセル開始フレームで1減算され、発生フレームでは被撃側が先に更新される。
+    // 次の技が命中する解決時まで硬直を残すため、発生+2Fを最低保証する。
+    defender.stun = Math.max(defender.stun, cancelMove.startup + 2);
+  }
+
+  /** 最終段がキャンセルされなかった時に、相手へ保留済みのノックバックを反映する。 */
   private applyPendingKnockback(attacker: PlayerId): void {
     const defender = this.fighters[attacker === 0 ? 1 : 0];
     const pending = defender.pendingKnockback;
@@ -668,17 +957,23 @@ export class MatchSimulation implements DeterministicSimulation {
     /** 近接技の判定、または飛び道具生成タイミングを処理する。 */
     if (this.winner !== null) return;
     const move = this.moveFor(attacker, attacker.activeMoveId);
-    if (!move || attacker.attackConnected) return;
-    const activeStart = move.startup;
-    const activeEnd = move.startup + move.active;
-    if (attacker.actionFrame < activeStart || attacker.actionFrame >= activeEnd)
-      return;
+    if (!move || !this.isMoveInActiveFrame(attacker, move)) return;
+
+    // actionFrameが別状態で変化しても、CSVのactive回数を超える攻撃判定は出さない。
+    attacker.activeFramesResolved += 1;
+    if (attacker.attackConnected) return;
 
     if (move.attackType === "projectile") {
       if (!attacker.projectileSpawned) {
         attacker.projectileSpawned = true;
         this.spawnProjectile(attacker, move);
       }
+      return;
+    }
+
+    // 投げは通常技のリーチではなく、押し込み判定の接触中だけ成立させる。
+    if (move.button === InputButton.Throw) {
+      this.resolveThrow(attacker, defender, move, defenderInput);
       return;
     }
 
@@ -694,6 +989,131 @@ export class MatchSimulation implements DeterministicSimulation {
     attacker.attackConnected = true;
     // 命中・ガードのどちらでも、弱・強は次の技へキャンセルできる。
     attacker.comboCancelable = connected && this.isComboSourceMove(move);
+  }
+
+  /** 投げの成立、後ろ投げ、投げ抜けを専用に解決する。 */
+  private resolveThrow(
+    attacker: FighterState,
+    defender: FighterState,
+    move: MoveDefinition,
+    defenderInput: FrameInput,
+  ): void {
+    // 相手を押せない距離・高さでは投げを空振りにする。
+    if (!this.isPushableForThrow(attacker, defender)) {
+      attacker.attackConnected = true;
+      return;
+    }
+
+    // 発生10F中に相手も投げを出した場合は、ダメージなしの投げ抜けにする。
+    if (this.isThrowTech(defender)) {
+      this.applyThrowTech(attacker, defender);
+      return;
+    }
+
+    const backwardThrow = attacker.throwDirection === -1;
+    // 後ろ投げだけは、CSVで設定した投げダメージの80%にする。
+    const damage = backwardThrow
+      ? Math.trunc((move.damage * 80) / 100)
+      : move.damage;
+    this.applyHit(attacker, defender, { ...move, damage }, defenderInput);
+    attacker.attackConnected = true;
+
+    if (backwardThrow) {
+      // 後ろ入力投げは両者の位置を入れ替え、投げ後の向きは次の更新で再計算する。
+      const attackerX = attacker.x;
+      attacker.x = defender.x;
+      defender.x = attackerX;
+      attacker.velocityX = 0;
+      defender.velocityX = 0;
+      return;
+    }
+
+    // ニュートラル・前入力投げは、投げた側だけを全通常技の外へ退かせる。
+    attacker.x = this.clampToStage(
+      defender.x - attacker.facing * THROW_SELF_KNOCKBACK_DISTANCE,
+    );
+    attacker.velocityX =
+      -attacker.facing * Math.trunc(THROW_TECH_KNOCKBACK_SPEED / 2);
+  }
+
+  /** 相手との押し込み判定が重なり、投げられる高さにいるかを調べる。 */
+  private isPushableForThrow(
+    attacker: FighterState,
+    defender: FighterState,
+  ): boolean {
+    if (Math.abs(attacker.y - defender.y) >= PASS_THROUGH_HEIGHT) return false;
+    const pushDistance =
+      this.hurtboxHalfWidth(attacker) +
+      this.hurtboxHalfWidth(defender) +
+      PUSHBOX_PADDING * 2;
+    return Math.abs(attacker.x - defender.x) <= pushDistance;
+  }
+
+  /** 相手が投げの発生中かを調べ、同時入力を投げ抜けとして扱う。 */
+  private isThrowTech(defender: FighterState): boolean {
+    const move = this.moveFor(defender, defender.activeMoveId);
+    return (
+      move?.button === InputButton.Throw && defender.actionFrame <= move.startup
+    );
+  }
+
+  /** 前入力を優先して、投げ開始時の入力を相手基準の方向へ変換する。 */
+  private throwDirectionFor(
+    fighter: FighterState,
+    inputButtons: number,
+  ): -1 | 0 | 1 {
+    const forward = this.isDirectionPressed(inputButtons, fighter.facing);
+    const backward = this.isDirectionPressed(
+      inputButtons,
+      fighter.facing === 1 ? -1 : 1,
+    );
+    if (forward) return 1;
+    return backward ? -1 : 0;
+  }
+
+  /** 投げ抜けとして攻撃を中断し、両者を反対側へ弾く。 */
+  private applyThrowTech(first: FighterState, second: FighterState): void {
+    const direction = first.x <= second.x ? 1 : -1;
+    this.resetAfterThrowTech(first);
+    this.resetAfterThrowTech(second);
+    first.x = this.clampToStage(
+      first.x - direction * THROW_TECH_KNOCKBACK_DISTANCE,
+    );
+    second.x = this.clampToStage(
+      second.x + direction * THROW_TECH_KNOCKBACK_DISTANCE,
+    );
+    first.velocityX = -direction * THROW_TECH_KNOCKBACK_SPEED;
+    second.velocityX = direction * THROW_TECH_KNOCKBACK_SPEED;
+  }
+
+  /** 投げ抜け後に、技・コンボ・ガード中の状態を解除する。 */
+  private resetAfterThrowTech(fighter: FighterState): void {
+    fighter.activeMoveId = null;
+    fighter.activeFramesResolved = 0;
+    fighter.attackConnected = true;
+    fighter.projectileSpawned = false;
+    fighter.throwDirection = 0;
+    fighter.comboCancelable = false;
+    fighter.pendingKnockback = null;
+    fighter.stun = 0;
+    fighter.guardStun = 0;
+    fighter.guardStance = null;
+    fighter.action = "idle";
+    fighter.actionFrame = 0;
+  }
+
+  /** 現在フレームが技の持続中かを、CSVのactive回数と処理済み回数の両方で判定する。 */
+  private isMoveInActiveFrame(
+    fighter: FighterState,
+    move: Pick<MoveDefinition, "startup" | "active">,
+  ): boolean {
+    const activeStart = move.startup;
+    const activeEnd = activeStart + move.active;
+    return (
+      fighter.actionFrame >= activeStart &&
+      fighter.actionFrame < activeEnd &&
+      fighter.activeFramesResolved < move.active
+    );
   }
 
   /** 攻撃者の前方・リーチ・高さが、相手の被弾判定に届いているかを返す。 */
@@ -737,6 +1157,8 @@ export class MatchSimulation implements DeterministicSimulation {
         Math.round((move.projectileSpeed * POSITION_SCALE) / 60),
       life: move.projectileLifetime,
       damage: move.damage,
+      guardPiercing: move.guardPiercing,
+      starterProration: move.starterProration,
       attackLevel: move.attackLevel,
       knockbackX: move.knockbackX,
       knockbackY: move.knockbackY,
@@ -778,27 +1200,58 @@ export class MatchSimulation implements DeterministicSimulation {
     defender: FighterState,
     attack: Pick<
       MoveDefinition,
-      "damage" | "attackLevel" | "knockbackX" | "knockbackY" | "hitstun"
+      | "damage"
+      | "guardPiercing"
+      | "starterProration"
+      | "attackLevel"
+      | "knockbackX"
+      | "knockbackY"
+      | "hitstun"
     >,
     defenderInput: FrameInput,
     /** 弱・強の命中なら、キャンセル成否までノックバックを保留する。 */
     deferKnockback = false,
   ): boolean {
     /** 近接技と飛び道具に共通する上中下ガード、ダメージ、KO処理を適用する。 */
+    const comboContinuation = this.isComboContinuation(attacker, defender);
     const guardStance = this.guardStanceFor(defender, attacker, defenderInput);
+    // コンボ中とguard_bleak=trueの技・飛び道具は、入力中のガードを常に貫通する。
     const defending =
+      !comboContinuation &&
+      !attack.guardPiercing &&
       guardStance !== null &&
       this.canGuardAttack(guardStance, attack.attackLevel);
     if (!defending) {
+      const hitCount = comboContinuation ? defender.comboHitCount + 1 : 1;
+      const starterProration = comboContinuation
+        ? defender.comboStarterProration
+        : attack.starterProration;
+      defender.comboHitCount = hitCount;
+      defender.comboStarterPlayer = attacker.player;
+      defender.comboStarterProration = starterProration;
       // 攻撃を受けて先行技が中断された場合は、未キャンセル技のノックバックを確定する。
       this.applyPendingKnockback(defender.player);
       // 被弾してヒットスタンへ入った時点で、実行中の技の持続判定を止める。
       // 先に被弾した側は同一フレーム後半にも攻撃を出せず、残り持続も発生しない。
       defender.activeMoveId = null;
+      defender.activeFramesResolved = 0;
       defender.attackConnected = false;
+      defender.throwDirection = 0;
       defender.comboCancelable = false;
+      // コンボ中に押した入力は、コンボ終了後の技発動にも持ち越さない。
+      defender.bufferedActionHistory.length = 0;
+      defender.inputHistory.length = 0;
     }
-    const damage = defending ? 0 : attack.damage;
+    const damage = defending
+      ? 0
+      : Math.trunc(
+          (attack.damage *
+            this.comboDamagePercent(
+              defender.comboHitCount,
+              defender.comboStarterProration,
+            )) /
+            100,
+        );
     defender.health = Math.max(0, defender.health - damage);
     if (
       this.training &&
@@ -848,10 +1301,36 @@ export class MatchSimulation implements DeterministicSimulation {
     if (defender.health === 0) {
       defender.action = "ko";
       defender.activeMoveId = null;
+      defender.activeFramesResolved = 0;
       this.finishRound(attacker.player);
     }
     // ガードされた場合も攻撃が接触した事実を返し、攻撃側のキャンセルを許可する。
     return true;
+  }
+
+  /** 被撃側が同じ攻撃者の被弾状態なら、次の命中を連続ヒットとして扱う。 */
+  private isComboContinuation(
+    attacker: FighterState,
+    defender: FighterState,
+  ): boolean {
+    return (
+      defender.action === "hit" &&
+      (defender.stun > 0 || defender.y < GROUND_Y * POSITION_SCALE) &&
+      defender.comboHitCount > 0 &&
+      defender.comboStarterPlayer === attacker.player
+    );
+  }
+
+  /**
+   * 段数に応じた補正率を返す。
+   * 1・2段目は100%、3段目から80%、以降10%ずつ減衰し、最低10%で固定する。
+   */
+  private comboDamagePercent(
+    hitCount: number,
+    starterProration: number,
+  ): number {
+    const basePercent = hitCount <= 2 ? 100 : Math.max(10, 110 - hitCount * 10);
+    return Math.max(10, basePercent + starterProration);
   }
 
   private applyAirControl(fighter: FighterState, input: FrameInput): void {
@@ -892,42 +1371,94 @@ export class MatchSimulation implements DeterministicSimulation {
     }
   }
 
-  /** command_idが指す方向入力列を、現在の向きを基準にして照合する。 */
+  /** 攻撃・ジャンプの新規押下を、押下後5フレーム先まで実行候補として記録する。 */
+  private recordBufferedActions(
+    fighter: FighterState,
+    newlyPressed: number,
+  ): void {
+    fighter.bufferedActionHistory.push(
+      newlyPressed & BUFFERABLE_ACTION_BUTTON_MASK,
+    );
+    // 押下したフレームとその後の5フレームを含めるため、履歴は6件保持する。
+    if (fighter.bufferedActionHistory.length > INPUT_BUFFER_FRAMES + 1) {
+      fighter.bufferedActionHistory.shift();
+    }
+  }
+
+  /** 有効期限内の先行入力をビット集合として返す。 */
+  private bufferedActionsFor(fighter: FighterState): number {
+    return fighter.bufferedActionHistory.reduce(
+      (buttons, bufferedButtons) => buttons | bufferedButtons,
+      0,
+    );
+  }
+
+  /** 実行済みのボタンを先行入力履歴の全フレームから取り除く。 */
+  private consumeBufferedActions(fighter: FighterState, buttons: number): void {
+    for (
+      let index = 0;
+      index < fighter.bufferedActionHistory.length;
+      index += 1
+    ) {
+      fighter.bufferedActionHistory[index] &= ~buttons;
+    }
+  }
+
+  /**
+   * command_idが指す方向入力列を、現在の向きを基準にして照合する。
+   * 最後の方向入力を離した後も、固定猶予内なら技ボタンによる発動を受け付ける。
+   */
   private matchesCommand(fighter: FighterState, commandId: string): boolean {
     const command = this.commandsById.get(commandId);
     const history = fighter.inputHistory;
     if (!command || history.length === 0) return false;
 
-    let sequenceIndex = command.sequence.length - 1;
-    const currentButtons = history[history.length - 1];
-    if (
-      !this.matchesCommandDirection(
-        currentButtons,
-        fighter.facing,
-        command.sequence[sequenceIndex],
-      )
-    ) {
-      return false;
-    }
-    sequenceIndex -= 1;
-
-    const earliestFrame = Math.max(0, history.length - (command.maxFrames + 1));
+    /** 技ボタンを押した現在フレームを基準に、コマンド全体の制限時間を計算する。 */
+    const latestInputFrame = history.length - 1;
+    const earliestEndFrame = Math.max(
+      0,
+      latestInputFrame - COMMAND_BUTTON_GRACE_FRAMES,
+    );
     for (
-      let index = history.length - 2;
-      index >= earliestFrame && sequenceIndex >= 0;
-      index -= 1
+      let endFrame = latestInputFrame;
+      endFrame >= earliestEndFrame;
+      endFrame -= 1
     ) {
+      let sequenceIndex = command.sequence.length - 1;
       if (
-        this.matchesCommandDirection(
-          history[index],
+        !this.matchesCommandDirection(
+          history[endFrame],
           fighter.facing,
           command.sequence[sequenceIndex],
         )
       ) {
-        sequenceIndex -= 1;
+        continue;
       }
+      sequenceIndex -= 1;
+
+      /**
+       * 最後の方向入力ではなく技ボタン時点を起点にすることで、
+       * 2F猶予を使っても commands.csv の max_frames を超えて受け付けない。
+       */
+      const earliestFrame = Math.max(0, latestInputFrame - command.maxFrames);
+      for (
+        let index = endFrame - 1;
+        index >= earliestFrame && sequenceIndex >= 0;
+        index -= 1
+      ) {
+        if (
+          this.matchesCommandDirection(
+            history[index],
+            fighter.facing,
+            command.sequence[sequenceIndex],
+          )
+        ) {
+          sequenceIndex -= 1;
+        }
+      }
+      if (sequenceIndex < 0) return true;
     }
-    return sequenceIndex < 0;
+    return false;
   }
 
   /** commands.csv のテンキー方向と、実際の十字入力が一致するかを返す。 */
@@ -1028,14 +1559,13 @@ export class MatchSimulation implements DeterministicSimulation {
     const direction = distance >= 0 ? 1 : -1;
     const shiftFirst = Math.trunc(overlap / 2);
     const shiftSecond = overlap - shiftFirst;
-    first.x = Math.max(
-      LEFT_WALL,
-      Math.min(RIGHT_WALL, first.x - direction * shiftFirst),
-    );
-    second.x = Math.max(
-      LEFT_WALL,
-      Math.min(RIGHT_WALL, second.x + direction * shiftSecond),
-    );
+    first.x = this.clampToStage(first.x - direction * shiftFirst);
+    second.x = this.clampToStage(second.x + direction * shiftSecond);
+  }
+
+  /** ステージ端を越えないよう、横座標を固定小数点座標のまま制限する。 */
+  private clampToStage(x: number): number {
+    return Math.max(LEFT_WALL, Math.min(RIGHT_WALL, x));
   }
 
   private nextRound(): void {

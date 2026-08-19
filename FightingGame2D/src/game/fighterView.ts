@@ -1,4 +1,4 @@
-import { Container, Graphics, Sprite, Text } from "pixi.js";
+import { Container, Graphics, Sprite, Text, Texture } from "pixi.js";
 
 import { POSITION_SCALE, type FighterState } from "./simulation";
 import type {
@@ -6,6 +6,136 @@ import type {
   BlenderSpriteAnimation,
   BlenderSpritePose,
 } from "./types";
+
+/** 画像解析で生成した、色替え用マスクと黒系カラー用の輪郭マスク。 */
+interface SpriteColorAnalysis {
+  readonly colorMask: HTMLCanvasElement;
+  readonly whiteOutlineMask: HTMLCanvasElement;
+}
+
+/** 同じPNGをP1・P2で重複解析しないための非同期解析キャッシュ。 */
+const spriteColorAnalysisCache = new Map<
+  string,
+  Promise<SpriteColorAnalysis | null>
+>();
+
+/** 黒系カラーでも背景から判別できるようにする、元画像ピクセルでの輪郭幅。 */
+const BLACK_OUTLINE_SOURCE_PIXELS = 8;
+
+/** Canvas 2Dコンテキストを必ず取得する。 */
+function canvasContext(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context)
+    throw new Error("画像カラー解析用のCanvasを作成できませんでした");
+  return context;
+}
+
+/** PNGを一度だけ解析し、色替え対象と白い外枠のアルファマスクを生成する。 */
+async function analyzeSpriteColors(
+  assetUrl: string,
+): Promise<SpriteColorAnalysis | null> {
+  try {
+    const response = await fetch(assetUrl);
+    if (!response.ok) return null;
+    const bitmap = await createImageBitmap(await response.blob());
+    try {
+      const source = document.createElement("canvas");
+      source.width = bitmap.width;
+      source.height = bitmap.height;
+      const sourceContext = canvasContext(source);
+      sourceContext.drawImage(bitmap, 0, 0);
+
+      const sourcePixels = sourceContext.getImageData(
+        0,
+        0,
+        source.width,
+        source.height,
+      );
+      const colorMask = document.createElement("canvas");
+      colorMask.width = source.width;
+      colorMask.height = source.height;
+      const colorContext = canvasContext(colorMask);
+      const maskPixels = colorContext.createImageData(
+        source.width,
+        source.height,
+      );
+
+      // 黒い線と白い歯・目は残し、彩度を持つキャラクター部分だけを色替え対象にする。
+      for (let index = 0; index < sourcePixels.data.length; index += 4) {
+        const red = sourcePixels.data[index];
+        const green = sourcePixels.data[index + 1];
+        const blue = sourcePixels.data[index + 2];
+        const alpha = sourcePixels.data[index + 3];
+        const maximum = Math.max(red, green, blue);
+        const minimum = Math.min(red, green, blue);
+        const brightness = (red * 54 + green * 183 + blue * 19) >> 8;
+        const chroma = maximum - minimum;
+
+        if (
+          alpha === 0 ||
+          brightness < 40 ||
+          (chroma < 20 && brightness > 210)
+        ) {
+          continue;
+        }
+
+        // 元画像の質感を残すため、彩度に応じてオーバーレイの不透明度を調整する。
+        const overlayAlpha = Math.round(
+          alpha * (0.52 + Math.min(0.3, chroma / 425)),
+        );
+        maskPixels.data[index] = 255;
+        maskPixels.data[index + 1] = 255;
+        maskPixels.data[index + 2] = 255;
+        maskPixels.data[index + 3] = overlayAlpha;
+      }
+      colorContext.putImageData(maskPixels, 0, 0);
+
+      // 元画像の不透明部分だけを白いシルエットにし、外側へ複数回ずらして輪郭を作る。
+      const silhouette = document.createElement("canvas");
+      silhouette.width = source.width;
+      silhouette.height = source.height;
+      const silhouetteContext = canvasContext(silhouette);
+      silhouetteContext.drawImage(source, 0, 0);
+      silhouetteContext.globalCompositeOperation = "source-in";
+      silhouetteContext.fillStyle = "#ffffff";
+      silhouetteContext.fillRect(0, 0, source.width, source.height);
+
+      const whiteOutlineMask = document.createElement("canvas");
+      whiteOutlineMask.width = source.width;
+      whiteOutlineMask.height = source.height;
+      const outlineContext = canvasContext(whiteOutlineMask);
+      for (let step = 0; step < 16; step += 1) {
+        const angle = (Math.PI * 2 * step) / 16;
+        outlineContext.drawImage(
+          silhouette,
+          Math.round(Math.cos(angle) * BLACK_OUTLINE_SOURCE_PIXELS),
+          Math.round(Math.sin(angle) * BLACK_OUTLINE_SOURCE_PIXELS),
+        );
+      }
+      outlineContext.globalCompositeOperation = "destination-out";
+      outlineContext.drawImage(silhouette, 0, 0);
+
+      return { colorMask, whiteOutlineMask };
+    } finally {
+      bitmap.close();
+    }
+  } catch {
+    // 解析に失敗しても元のPNG表示を継続する。
+    return null;
+  }
+}
+
+/** URLごとに初回だけPNGを解析する。 */
+function spriteColorAnalysisFor(
+  assetUrl: string,
+): Promise<SpriteColorAnalysis | null> {
+  let analysis = spriteColorAnalysisCache.get(assetUrl);
+  if (!analysis) {
+    analysis = analyzeSpriteColors(assetUrl);
+    spriteColorAnalysisCache.set(assetUrl, analysis);
+  }
+  return analysis;
+}
 
 /**
  * ファイター表示クラス
@@ -29,6 +159,12 @@ export class FighterView extends Container {
 
   /** Blenderアニメーションに連動して動かすキャラクタースプライト。 */
   private readonly animatedSprite?: Sprite;
+
+  /** 画像解析で作った選択カラー用オーバーレイ。 */
+  private readonly spriteColorOverlay?: Sprite;
+
+  /** 黒系カラー時だけ表示する、PNGキャラクターの白い外枠。 */
+  private readonly spriteWhiteOutline?: Sprite;
 
   /** 前回反映したファイター座標。変化時だけContainer座標を更新する。 */
   private lastX = Number.NaN;
@@ -69,12 +205,35 @@ export class FighterView extends Container {
       const sprite = Sprite.from(this.gameAssetUrl(spriteDefinition.asset));
       sprite.anchor.set(spriteDefinition.anchor[0], spriteDefinition.anchor[1]);
       this.animatedSprite = sprite;
+
+      const colorOverlay = new Sprite();
+      colorOverlay.anchor.set(
+        spriteDefinition.anchor[0],
+        spriteDefinition.anchor[1],
+      );
+      colorOverlay.visible = false;
+      this.spriteColorOverlay = colorOverlay;
+
+      const whiteOutline = new Sprite();
+      whiteOutline.anchor.set(
+        spriteDefinition.anchor[0],
+        spriteDefinition.anchor[1],
+      );
+      whiteOutline.visible = false;
+      this.spriteWhiteOutline = whiteOutline;
+
+      // PNG読込直後に一度だけ色替え用マスクを解析し、対戦中の負荷を増やさない。
+      void this.prepareSpriteColorLayers(
+        this.gameAssetUrl(spriteDefinition.asset),
+      );
     }
 
     // 描画順
-    // 影 → Blenderスプライト（存在時） → 本体エフェクト → 名前
+    // 影 → 白枠 → Blenderスプライト → カラーオーバーレイ → 本体エフェクト → 名前
     this.addChild(this.shadow);
+    if (this.spriteWhiteOutline) this.addChild(this.spriteWhiteOutline);
     if (this.animatedSprite) this.addChild(this.animatedSprite);
+    if (this.spriteColorOverlay) this.addChild(this.spriteColorOverlay);
     this.addChild(this.body, this.nameplate);
 
     // 地面の影と名前位置はキャラクター状態に依存しないため、初期化時だけ描画する。
@@ -153,6 +312,26 @@ export class FighterView extends Container {
     return `${import.meta.env.BASE_URL}${path.replace(/^\//, "")}`;
   }
 
+  /** 初回画像解析で作ったマスクをスプライトへ設定する。 */
+  private async prepareSpriteColorLayers(assetUrl: string): Promise<void> {
+    const analysis = await spriteColorAnalysisFor(assetUrl);
+    if (!analysis || this.destroyed) return;
+
+    const colorOverlay = this.spriteColorOverlay;
+    const whiteOutline = this.spriteWhiteOutline;
+    if (!colorOverlay || !whiteOutline) return;
+
+    colorOverlay.texture = Texture.from(analysis.colorMask, true);
+    colorOverlay.tint = this.fighter.character.primaryColor;
+    colorOverlay.visible = this.fighter.character.colorVariant !== "default";
+
+    whiteOutline.texture = Texture.from(analysis.whiteOutlineMask, true);
+    whiteOutline.visible = this.usesWhiteOutline();
+
+    // 非同期でレイヤーを追加した直後も、次回更新で現在のポーズへ同期する。
+    this.lastVisualKey = "";
+  }
+
   /** Blender出力に含まれる、現在アクション用のスプライトポーズを取得する。 */
   private spritePosesForCurrentAction(
     definition: BlenderSpriteAnimation,
@@ -183,9 +362,22 @@ export class FighterView extends Container {
     const mirror = this.fighter.facing;
     const scale = definition.scale * (pose.scale ?? 1);
 
-    this.animatedSprite!.position.set((pose.x ?? 0) * mirror, pose.y ?? 0);
-    this.animatedSprite!.rotation = (pose.rotation ?? 0) * mirror;
-    this.animatedSprite!.scale.set(scale * mirror, scale);
+    // 元PNG・色オーバーレイ・白枠を完全に同じ姿勢で動かし、ずれを防ぐ。
+    for (const sprite of [
+      this.animatedSprite,
+      this.spriteColorOverlay,
+      this.spriteWhiteOutline,
+    ]) {
+      if (!sprite) continue;
+      sprite.position.set((pose.x ?? 0) * mirror, pose.y ?? 0);
+      sprite.rotation = (pose.rotation ?? 0) * mirror;
+      sprite.scale.set(scale * mirror, scale);
+    }
+  }
+
+  /** 黒系カラーは背景へ溶け込まないよう、白い境界線を表示する。 */
+  private usesWhiteOutline(): boolean {
+    return this.fighter.character.colorVariant === "black";
   }
 
   /** 従来のBlenderボーン線分JSONを、Pixiの線分・関節として描画する。 */
@@ -200,6 +392,13 @@ export class FighterView extends Container {
     for (const segment of pose.segments) {
       const [x1 = 0, y1 = 0, x2 = 0, y2 = 0, width = 8] = segment;
 
+      if (this.usesWhiteOutline()) {
+        this.body
+          .moveTo(x1 * mirror, y1)
+          .lineTo(x2 * mirror, y2)
+          .stroke({ color: 0xffffff, width: width + 4, cap: "round" });
+      }
+
       this.body
         .moveTo(x1 * mirror, y1)
         .lineTo(x2 * mirror, y2)
@@ -210,12 +409,20 @@ export class FighterView extends Container {
         });
 
       // 関節描画
+      if (this.usesWhiteOutline()) {
+        this.body.circle(x2 * mirror, y2, Math.max(5, width * 0.42 + 2)).fill({
+          color: 0xffffff,
+        });
+      }
       this.body.circle(x2 * mirror, y2, Math.max(3, width * 0.42)).fill({
         color: this.fighter.character.accentColor,
       });
     }
 
     // 骨格データに頭部がない場合でも、キャラクターの向きが分かる頭を重ねる。
+    if (this.usesWhiteOutline()) {
+      this.body.circle(0, -122, 19).fill({ color: 0xffffff });
+    }
     this.body
       .circle(0, -122, 16)
       .fill({
@@ -289,6 +496,28 @@ export class FighterView extends Container {
     //====================================================
     // 胴体・腕・脚・頭を描画
     //====================================================
+    if (this.usesWhiteOutline()) {
+      // 黒系スティックファイターも背景へ沈まないよう、各パーツの下に白い境界線を描く。
+      this.body
+        .moveTo(0, -82)
+        .lineTo(lean * mirror, -40)
+        .stroke({ color: 0xffffff, width: 16, cap: "round" })
+        .moveTo(lean * mirror, -72)
+        .lineTo((lean + armReach) * mirror, attacking ? -72 : -48)
+        .stroke({ color: 0xffffff, width: 12, cap: "round" })
+        .moveTo(lean * mirror, -72)
+        .lineTo((lean - 30) * mirror, -48)
+        .stroke({ color: 0xffffff, width: 12, cap: "round" })
+        .moveTo(lean * mirror, -40)
+        .lineTo((-21 + walkSwing) * mirror, 0)
+        .stroke({ color: 0xffffff, width: 14, cap: "round" })
+        .moveTo(lean * mirror, -40)
+        .lineTo((22 - walkSwing) * mirror, 0)
+        .stroke({ color: 0xffffff, width: 14, cap: "round" })
+        .circle(0, -104, 23)
+        .fill({ color: 0xffffff });
+    }
+
     this.body
       .moveTo(0, -82)
       .lineTo(lean * mirror, -40)

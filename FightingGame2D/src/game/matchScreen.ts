@@ -19,6 +19,7 @@ import {
   FRAMES_PER_SECOND,
   GROUND_Y,
   MAX_ROUNDS,
+  MAX_SPECIAL_GAUGE,
   MatchSimulation,
   STAGE_HEIGHT,
   STAGE_WIDTH,
@@ -105,6 +106,9 @@ export class MatchScreen extends Container {
   /** トレーニング入力履歴の背景パネル。 */
   private readonly trainingInputHistoryArt = new Graphics();
 
+  /** トレーニング時に被弾・攻撃判定を重ねて表示するレイヤー。 */
+  private readonly trainingCollisionDebugArt = new Graphics();
+
   /** 入力管理 */
   private readonly input = new InputManager();
 
@@ -178,6 +182,11 @@ export class MatchScreen extends Container {
     "training-input-history",
   )! as HTMLSelectElement;
 
+  /** トレーニング中の被弾・攻撃判定を表示するかを切り替える選択欄。 */
+  private readonly trainingCollisionDebugSelect = document.getElementById(
+    "training-collision-debug",
+  )! as HTMLSelectElement;
+
   /** キー入力を待機している操作。nullなら通常のオプション表示中。 */
   private keyBindingTarget:
     | (KeyBindingTarget & { readonly button: HTMLButtonElement })
@@ -216,11 +225,17 @@ export class MatchScreen extends Container {
   /** KO表示 */
   private readonly koText: Text;
 
+  /** 被撃側の連続ヒット数を表示するCOMBOテキスト。 */
+  private readonly comboText: Text;
+
   /** トレーニング中のP1入力履歴を縦並びで描画するText。 */
   private readonly trainingInputHistoryText: Text;
 
   /** 入力履歴表示のオン・オフ状態。トレーニング以外では常にオフ。 */
   private trainingInputHistoryEnabled = false;
+
+  /** 被弾判定（赤）と有効中の攻撃判定（青）のトレーニング表示状態。 */
+  private trainingCollisionDebugEnabled = false;
 
   /** 最新入力を先頭に保持する、表示専用の入力履歴。 */
   private readonly trainingInputHistory: number[] = [];
@@ -230,6 +245,9 @@ export class MatchScreen extends Container {
 
   /** 前回HUDへ描画した体力。変化時だけGraphicsを描き直す。 */
   private readonly displayedHealth: [number, number] = [-1, -1];
+
+  /** 前回HUDへ描画した必殺技ゲージ。変化時だけGraphicsを描き直す。 */
+  private readonly displayedSpecialGauge: [number, number] = [-1, -1];
 
   /** 前フレームに飛び道具Graphicsが存在したか。 */
   private hadProjectiles = false;
@@ -354,6 +372,8 @@ export class MatchScreen extends Container {
     this.info = this.createText("", 14, "#a9c7ed");
     this.roundText = this.createText("ROUND 1 / 3", 15, "#ffffff");
     this.koText = this.createText("", 64, "#fff1a3");
+    this.comboText = this.createText("", 32, "#ffe58a");
+    this.comboText.visible = false;
     this.trainingInputHistoryText = new Text({
       text: "",
       style: {
@@ -381,6 +401,7 @@ export class MatchScreen extends Container {
       this.projectileSpriteLayer,
       this.fighterViews[0],
       this.fighterViews[1],
+      this.trainingCollisionDebugArt,
       this.hudArt,
       this.trainingInputHistoryArt,
     );
@@ -390,6 +411,7 @@ export class MatchScreen extends Container {
       this.info,
       this.roundText,
       this.koText,
+      this.comboText,
       this.trainingInputHistoryText,
     );
 
@@ -430,6 +452,10 @@ export class MatchScreen extends Container {
       this.updateTrainingCpuSettings,
     );
     this.trainingInputHistorySelect.addEventListener(
+      "change",
+      this.updateTrainingCpuSettings,
+    );
+    this.trainingCollisionDebugSelect.addEventListener(
       "change",
       this.updateTrainingCpuSettings,
     );
@@ -593,6 +619,10 @@ export class MatchScreen extends Container {
       this.updateTrainingCpuSettings,
     );
     this.trainingInputHistorySelect.removeEventListener(
+      "change",
+      this.updateTrainingCpuSettings,
+    );
+    this.trainingCollisionDebugSelect.removeEventListener(
       "change",
       this.updateTrainingCpuSettings,
     );
@@ -789,6 +819,9 @@ export class MatchScreen extends Container {
     this.setTrainingInputHistoryEnabled(
       this.trainingInputHistorySelect.value === "on",
     );
+    this.setTrainingCollisionDebugEnabled(
+      this.trainingCollisionDebugSelect.value === "on",
+    );
   };
 
   /** モーダルが開いているかを返す。 */
@@ -805,6 +838,45 @@ export class MatchScreen extends Container {
     this.trainingInputHistoryText.visible = nextEnabled;
   }
 
+  /** トレーニング用の被弾・攻撃判定表示を有効・無効化する。 */
+  private setTrainingCollisionDebugEnabled(enabled: boolean): void {
+    const nextEnabled = this.training && enabled;
+    if (this.trainingCollisionDebugEnabled === nextEnabled) return;
+
+    this.trainingCollisionDebugEnabled = nextEnabled;
+    if (!nextEnabled) {
+      this.trainingCollisionDebugArt.clear();
+      return;
+    }
+    this.drawTrainingCollisionDebug();
+  }
+
+  /** 被弾判定を赤、技の有効中の攻撃判定を青の半透明ボックスで描画する。 */
+  private drawTrainingCollisionDebug(): void {
+    const art = this.trainingCollisionDebugArt;
+    if (!this.trainingCollisionDebugEnabled) return;
+    art.clear();
+
+    for (const collision of this.simulation.getCollisionDebugBoxes()) {
+      art
+        .rect(
+          collision.hurtbox.x,
+          collision.hurtbox.y,
+          collision.hurtbox.width,
+          collision.hurtbox.height,
+        )
+        .fill({ color: 0xef4444, alpha: 0.2 })
+        .stroke({ color: 0xff7373, width: 2, alpha: 0.9 });
+
+      const attackbox = collision.attackbox;
+      if (!attackbox) continue;
+      art
+        .rect(attackbox.x, attackbox.y, attackbox.width, attackbox.height)
+        .fill({ color: 0x38bdf8, alpha: 0.2 })
+        .stroke({ color: 0x7dd3fc, width: 2, alpha: 0.9 });
+    }
+  }
+
   /** P1の入力変化だけを、最新順のトレーニング入力履歴へ記録する。 */
   private recordTrainingInputHistory(buttons: number): void {
     if (!this.trainingInputHistoryEnabled) return;
@@ -817,7 +889,8 @@ export class MatchScreen extends Container {
         InputButton.Down |
         InputButton.Light |
         InputButton.Heavy |
-        InputButton.Special);
+        InputButton.Special |
+        InputButton.Throw);
     if (trackedButtons === this.previousTrainingInputButtons) return;
 
     this.previousTrainingInputButtons = trackedButtons;
@@ -867,6 +940,7 @@ export class MatchScreen extends Container {
     if ((buttons & InputButton.Special) !== 0) actions.push("必");
     if ((buttons & InputButton.Heavy) !== 0) actions.push("強");
     if ((buttons & InputButton.Light) !== 0) actions.push("弱");
+    if ((buttons & InputButton.Throw) !== 0) actions.push("投");
     return [direction, ...actions].filter(Boolean).join(" ");
   }
 
@@ -951,13 +1025,17 @@ export class MatchScreen extends Container {
     const [left, right] = this.simulation.fighters;
     if (
       left.health === this.displayedHealth[0] &&
-      right.health === this.displayedHealth[1]
+      right.health === this.displayedHealth[1] &&
+      left.specialGauge === this.displayedSpecialGauge[0] &&
+      right.specialGauge === this.displayedSpecialGauge[1]
     ) {
       return;
     }
 
     this.displayedHealth[0] = left.health;
     this.displayedHealth[1] = right.health;
+    this.displayedSpecialGauge[0] = left.specialGauge;
+    this.displayedSpecialGauge[1] = right.specialGauge;
     const art = this.hudArt;
     art.clear();
 
@@ -967,6 +1045,7 @@ export class MatchScreen extends Container {
       470,
       left.health / left.character.maxHealth,
       left.character.primaryColor,
+      left.character.colorVariant === "black",
       false,
     );
     this.drawHealthBar(
@@ -975,8 +1054,12 @@ export class MatchScreen extends Container {
       470,
       right.health / right.character.maxHealth,
       right.character.primaryColor,
+      right.character.colorVariant === "black",
       true,
     );
+    // キャラクターカラーとは独立した固定色で、HPバー直下に必殺技ゲージを描画する。
+    this.drawSpecialGauge(48, 74, 470, left.specialGauge, false);
+    this.drawSpecialGauge(STAGE_WIDTH - 48, 74, 470, right.specialGauge, true);
   }
 
   /**
@@ -987,6 +1070,7 @@ export class MatchScreen extends Container {
    * @param width バーの幅
    * @param ratio 残体力(0～1)
    * @param color バー色
+   * @param whiteOutline 黒系カラー用の白い境界線を表示するか
    * @param reverse 右側表示か
    */
   private drawHealthBar(
@@ -995,15 +1079,47 @@ export class MatchScreen extends Container {
     width: number,
     ratio: number,
     color: number,
+    whiteOutline: boolean,
     reverse: boolean,
   ): void {
     const barX = reverse ? x - width : x;
     this.hudArt
       .roundRect(barX, y, width, 25, 7)
       .fill({ color: 0x030712, alpha: 0.85 });
+    if (whiteOutline) {
+      // 黒系の残量バーが夜景背景へ溶け込まないよう、外枠を白で強調する。
+      this.hudArt.roundRect(barX, y, width, 25, 7).stroke({
+        color: 0xffffff,
+        width: 2,
+        alpha: 0.95,
+      });
+    }
     const fillWidth = Math.max(0, Math.round((width - 6) * ratio));
     const fillX = reverse ? x - 3 - fillWidth : x + 3;
     this.hudArt.roundRect(fillX, y + 3, fillWidth, 19, 5).fill({ color });
+  }
+
+  /** 最大100の必殺技ゲージを、キャラクター色に依存しない黄色で描画する。 */
+  private drawSpecialGauge(
+    x: number,
+    y: number,
+    width: number,
+    gauge: number,
+    reverse: boolean,
+  ): void {
+    const barX = reverse ? x - width : x;
+    this.hudArt
+      .roundRect(barX, y, width, 11, 4)
+      .fill({ color: 0x030712, alpha: 0.9 })
+      .stroke({ color: 0xf7d04f, width: 1, alpha: 0.8 });
+    const fillWidth = Math.max(
+      0,
+      Math.round(((width - 4) * gauge) / MAX_SPECIAL_GAUGE),
+    );
+    const fillX = reverse ? x - 2 - fillWidth : x + 2;
+    this.hudArt
+      .roundRect(fillX, y + 2, fillWidth, 7, 3)
+      .fill({ color: 0xf7d04f });
   }
 
   /**
@@ -1018,8 +1134,10 @@ export class MatchScreen extends Container {
   private refreshViews(): void {
     this.fighterViews[0].update();
     this.fighterViews[1].update();
+    this.drawTrainingCollisionDebug();
     this.drawProjectiles();
     this.drawHud();
+    this.updateComboText();
     this.playMatchResultFireworks();
     if (!this.training) {
       this.setTextIfChanged(
@@ -1058,6 +1176,26 @@ export class MatchScreen extends Container {
             Math.ceil(this.simulation.roundTimeFrames / FRAMES_PER_SECOND),
           ),
     );
+  }
+
+  /** 2段目以降の連続ヒット数を、攻撃側HPバーの中央寄り下へ表示する。 */
+  private updateComboText(): void {
+    const comboTarget = this.simulation.fighters.find(
+      (fighter) => fighter.comboHitCount >= 2 && fighter.action === "hit",
+    );
+    if (!comboTarget) {
+      this.comboText.visible = false;
+      return;
+    }
+
+    const attacker = comboTarget.comboStarterPlayer;
+    if (attacker === null) {
+      this.comboText.visible = false;
+      return;
+    }
+    this.comboText.visible = true;
+    this.comboText.position.set(attacker === 0 ? 490 : STAGE_WIDTH - 490, 92);
+    this.setTextIfChanged(this.comboText, `${comboTarget.comboHitCount} HIT`);
   }
 
   /** 2本先取で試合勝者が決定した瞬間だけ、下から中央へ3発の花火を打ち上げる。 */

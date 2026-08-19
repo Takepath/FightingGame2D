@@ -49,11 +49,14 @@ export function characterWithColor(
   character: CharacterDefinition,
   color: ColorVariant,
 ): CharacterDefinition {
-  if (color === "default") return character;
+  if (color === "default") {
+    return { ...character, colorVariant: "default" };
+  }
 
   const option = FIXED_COLOR_OPTIONS[color];
   return {
     ...character,
+    colorVariant: color,
     primaryColor: option.primaryColor,
     accentColor: option.accentColor,
   };

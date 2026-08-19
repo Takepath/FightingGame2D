@@ -34,6 +34,7 @@ const buttonNames: Record<string, InputButton> = {
   light: InputButton.Light,
   heavy: InputButton.Heavy,
   special: InputButton.Special,
+  throw: InputButton.Throw,
 };
 
 /** commands.csv の sequence で指定できるテンキー方向一覧。 */
@@ -128,6 +129,39 @@ function toAttackLevel(value: string): AttackLevel {
   return "mid";
 }
 
+/** moves.csv の guard_bleak を、ガード貫通設定へ変換する。 */
+function toGuardBleak(value: string | undefined): boolean {
+  return value?.trim().toLowerCase() === "true";
+}
+
+/**
+ * moves.csv の cancel_into を、キャンセル開始できる攻撃ボタン種別へ変換する。
+ * 複数指定は light|heavy|special|throw のように | で区切り、未知の値は無視する。
+ */
+function toCancelInto(value: string | undefined): readonly InputButton[] {
+  const buttons = new Set<InputButton>();
+  for (const name of (value ?? "").split("|")) {
+    const button = buttonNames[name.trim().toLowerCase()];
+    if (button !== undefined) buttons.add(button);
+  }
+  return [...buttons];
+}
+
+/**
+ * moves.csv の command_idをコマンドID配列へ変換する。
+ * hadoken|hadoken_simple のように書くと、いずれかの入力で同じ技を実行できる。
+ */
+function toCommandIds(value: string | undefined): readonly string[] {
+  return [
+    ...new Set(
+      (value ?? "")
+        .split("|")
+        .map((id) => id.trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
 /**
  * キャラクター定義CSVをCharacterDefinition配列へ変換する
  */
@@ -146,10 +180,13 @@ function parseCharacters(source: string): CharacterDefinition[] {
     iconAsset: row.icon_asset,
 
     // キャラクターカラー
+    // CSV読込時はデフォルト色とし、選択画面で対戦用の色へ差し替える。
+    colorVariant: "default",
     primaryColor: toColor(row.primary_color),
     accentColor: toColor(row.accent_color),
 
     // 基本ステータス
+    // max_health は damage と同じ実数HPポイントで管理する。
     maxHealth: Number(row.max_health),
     walkSpeed: Number(row.walk_speed),
     jumpVelocity: Number(row.jump_velocity),
@@ -180,7 +217,18 @@ function parseMoves(source: string): MoveDefinition[] {
     recovery: Number(row.recovery),
 
     // 攻撃性能
+    // 割合へ換算せず、CSVに記述した実数HPポイントをそのまま使用する。
     damage: Number(row.damage),
+    // 空欄は消費なしとして扱い、既存の通常技をそのまま利用できるようにする。
+    specialGaugeCost: row.special_gauge_cost
+      ? Number(row.special_gauge_cost)
+      : 0,
+    // guard_bleak=trueの技は後ろ入力ガードを無視してダメージを与える。
+    guardPiercing: toGuardBleak(row.guard_bleak),
+    // コンボ始動補正は未指定時を0%として扱い、従来CSVも読み込めるようにする。
+    starterProration: Number(row.starter_proration) || 0,
+    // 硬直キャンセル先は light|heavy|special|throw の組み合わせでCSVに登録する。
+    cancelInto: toCancelInto(row.cancel_into),
     rangeX: Number(row.range_x),
     rangeY: Number(row.range_y),
     // 技開始時に攻撃側へ与える移動量。正のY値は上方向へ移動する。
@@ -208,8 +256,8 @@ function parseMoves(source: string): MoveDefinition[] {
     // projectiles.csv の見た目定義を参照するID。近接技は空欄のままにする。
     projectileId: row.projectile_id || null,
 
-    // commands.csv を参照する技だけが、方向コマンドを必要とする。
-    commandId: row.command_id || null,
+    // command_idは|区切りで複数参照でき、いずれかのコマンドで技を実行できる。
+    commandIds: toCommandIds(row.command_id),
   }));
 }
 
@@ -358,6 +406,36 @@ export async function loadGameData(
   }
 
   // オンライン対戦でCSVのIDを選択値として送るため、重複を禁止する。
+  // HPとダメージは同じ単位の整数ポイントとして扱い、割合指定や小数値を受け付けない。
+  for (const character of characters) {
+    if (!Number.isInteger(character.maxHealth) || character.maxHealth <= 0) {
+      throw new Error(
+        `characters.csv の ${character.id} の max_health は1以上の整数HPを指定してください`,
+      );
+    }
+  }
+  for (const move of moves) {
+    if (!Number.isInteger(move.damage) || move.damage < 0) {
+      throw new Error(
+        `moves.csv の ${move.id} の damage は0以上の整数ダメージを指定してください`,
+      );
+    }
+    if (
+      !Number.isInteger(move.specialGaugeCost) ||
+      move.specialGaugeCost < 0 ||
+      move.specialGaugeCost > 100
+    ) {
+      throw new Error(
+        `moves.csv の ${move.id} の special_gauge_cost は0〜100の整数を指定してください`,
+      );
+    }
+    if (!Number.isInteger(move.starterProration)) {
+      throw new Error(
+        `moves.csv の ${move.id} の starter_proration は整数パーセントを指定してください`,
+      );
+    }
+  }
+
   const characterIds = new Set(characters.map((character) => character.id));
   if (characterIds.size !== characters.length) {
     throw new Error("characters.csv の id は重複なしで定義してください");
@@ -377,9 +455,10 @@ export async function loadGameData(
     throw new Error("commands.csv の command_id は重複なしで定義してください");
   }
   for (const move of moves) {
-    if (move.commandId !== null && !commandIds.has(move.commandId)) {
+    for (const commandId of move.commandIds) {
+      if (commandIds.has(commandId)) continue;
       throw new Error(
-        `moves.csv の ${move.id} が未定義の command_id (${move.commandId}) を参照しています`,
+        `moves.csv の ${move.id} が未定義の command_id (${commandId}) を参照しています`,
       );
     }
   }

@@ -11,7 +11,8 @@ export type KeyboardAction =
   | "down"
   | "light"
   | "heavy"
-  | "special";
+  | "special"
+  | "throw";
 
 /** キーコンフィグ画面と入力処理で共有する、操作項目の定義。 */
 export interface KeyboardActionDefinition {
@@ -32,6 +33,7 @@ export const KEYBOARD_ACTIONS: readonly KeyboardActionDefinition[] = [
   { action: "light", label: "弱攻撃", button: InputButton.Light },
   { action: "heavy", label: "強攻撃", button: InputButton.Heavy },
   { action: "special", label: "必殺技", button: InputButton.Special },
+  { action: "throw", label: "投げ", button: InputButton.Throw },
 ] as const;
 
 /** キー割り当ての対象となるプレイヤーと操作項目。 */
@@ -82,6 +84,7 @@ const DEFAULT_KEYBOARD_BINDINGS: KeyboardBindings = {
     light: "KeyF",
     heavy: "KeyG",
     special: "KeyH",
+    throw: "Space",
   },
   1: {
     left: "ArrowLeft",
@@ -91,6 +94,7 @@ const DEFAULT_KEYBOARD_BINDINGS: KeyboardBindings = {
     light: "Numpad1",
     heavy: "Numpad2",
     special: "Numpad3",
+    throw: "Numpad0",
   },
 };
 
@@ -102,49 +106,63 @@ function cloneKeyboardBindings(): KeyboardBindings {
   };
 }
 
-/** 保存済み設定から有効な操作だけを複製し、廃止済みの振り向きキーを除去する。 */
-function copyActiveKeyboardBindings(
-  source: KeyboardBindings,
-): KeyboardBindings {
-  const bindings = cloneKeyboardBindings();
-  for (const player of PLAYERS) {
-    for (const { action } of KEYBOARD_ACTIONS) {
-      bindings[player][action] = source[player][action];
-    }
-  }
-  return bindings;
-}
-
 /** JSONとして復元した値がオブジェクトかを確認する。 */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-/** 保存済みデータが、重複のない完全なキー配置かを検証する。 */
-function isValidKeyboardBindings(value: unknown): value is KeyboardBindings {
-  if (!isRecord(value)) return false;
+/**
+ * 保存済みキー設定を現在の項目へ移行する。
+ * 投げ追加前の設定では既存キーを維持し、未設定の投げだけを空きキーへ割り当てる。
+ */
+function migrateKeyboardBindings(value: unknown): KeyboardBindings | null {
+  if (!isRecord(value)) return null;
 
+  const bindings = cloneKeyboardBindings();
   const assignedCodes = new Set<string>();
+  const storedThrow: Record<PlayerId, boolean> = { 0: false, 1: false };
   for (const player of PLAYERS) {
     const playerBindings = value[String(player)];
-    if (!isRecord(playerBindings)) return false;
+    if (!isRecord(playerBindings)) return null;
 
     for (const { action } of KEYBOARD_ACTIONS) {
       const code = playerBindings[action];
-      // 旧バージョンで保存された設定には向き反転キーがないため、
-      // その項目だけ初期値を補完して既存のキー配置を維持する。
+      // 旧バージョンには投げ項目がないため、この項目だけは後段で既定値を補う。
+      if (action === "throw" && typeof code === "undefined") continue;
       if (
         typeof code !== "string" ||
         !isConfigurableKeyboardCode(code) ||
         assignedCodes.has(code)
       ) {
-        return false;
+        return null;
       }
       assignedCodes.add(code);
+      bindings[player][action] = code;
+      if (action === "throw") storedThrow[player] = true;
     }
   }
 
-  return true;
+  for (const player of PLAYERS) {
+    // すでに保存済みの投げキーは、そのまま利用する。
+    if (storedThrow[player]) continue;
+    const defaultThrowCode = bindings[player].throw;
+    if (!assignedCodes.has(defaultThrowCode)) {
+      assignedCodes.add(defaultThrowCode);
+      continue;
+    }
+
+    // 既存設定が標準の投げキーを使っていた場合も、競合しない代替キーを選ぶ。
+    const alternatives =
+      player === 0
+        ? ["KeyR", "KeyT", "KeyY", "KeyU"]
+        : ["Numpad0", "NumpadDecimal", "NumpadEnter"];
+    const alternative = alternatives.find((code) => !assignedCodes.has(code));
+    if (!alternative) return null;
+    bindings[player].throw = alternative;
+    assignedCodes.add(alternative);
+  }
+
+  return bindings;
 }
 
 /** localStorageからキー配置を復元し、壊れたデータは標準配置へ戻す。 */
@@ -155,9 +173,8 @@ function loadKeyboardBindings(): KeyboardBindings {
     if (!stored) return cloneKeyboardBindings();
 
     const parsed: unknown = JSON.parse(stored);
-    if (isValidKeyboardBindings(parsed)) {
-      return copyActiveKeyboardBindings(parsed);
-    }
+    const migrated = migrateKeyboardBindings(parsed);
+    if (migrated) return migrated;
   } catch {
     // プライベートモードなどで保存領域を利用できない場合も標準配置で続行する。
   }
@@ -383,6 +400,8 @@ export class InputManager {
     if (buttonDown(gamepad, 0)) buttons |= InputButton.Light;
     if (buttonDown(gamepad, 2)) buttons |= InputButton.Heavy;
     if (buttonDown(gamepad, 1)) buttons |= InputButton.Special;
+    // Xbox標準ゲームパッドのRT（右トリガー）はボタン番号7として取得する。
+    if (buttonDown(gamepad, 7)) buttons |= InputButton.Throw;
 
     return buttons;
   }

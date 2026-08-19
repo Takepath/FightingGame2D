@@ -7,6 +7,7 @@ export const enum InputButton {
   Light = 1 << 4,
   Heavy = 1 << 5,
   Special = 1 << 6,
+  Throw = 1 << 7,
 }
 
 export interface FrameInput {
@@ -66,7 +67,16 @@ export interface MoveDefinition {
   startup: number;
   active: number;
   recovery: number;
+  /** HPと同じ実数ポイントで扱うダメージ量。例: 500 は 500 HP のダメージ。 */
   damage: number;
+  /** 最大100の必殺技ゲージから、技開始時に消費する量。0なら消費しない。 */
+  specialGaugeCost: number;
+  /** trueなら後ろ入力ガードを無視してダメージを与える。投げは必ずtrueにする。 */
+  guardPiercing: boolean;
+  /** コンボ始動時の補正率。20なら120%、-10なら90%を初期補正率にする。 */
+  starterProration: number;
+  /** この技の硬直をキャンセルして開始できる攻撃ボタン種別。moves.csvでは|区切りで指定する。 */
+  cancelInto: readonly InputButton[];
   /** 攻撃者の前方へ伸びるリーチ（相手の胴体端を基準にしたピクセル）。 */
   rangeX: number;
   /** 攻撃中心から上下へ伸びる判定の余白（ピクセル）。 */
@@ -88,8 +98,8 @@ export interface MoveDefinition {
   projectileLifetime: number;
   /** projectiles.csv の id。近接技では未指定にする。 */
   projectileId: string | null;
-  /** commands.csv の command_id。空文字なら攻撃ボタンだけで技を出す。 */
-  commandId: string | null;
+  /** commands.csv の command_id群。moves.csvでは|区切りで指定し、空欄なら攻撃ボタンだけで技を出す。 */
+  commandIds: readonly string[];
 }
 
 /** projectiles.csv で管理する飛び道具の見た目定義。 */
@@ -121,8 +131,11 @@ export interface CharacterDefinition {
   animationAsset: string;
   /** キャラクター選択カードに表示するPNG画像のパス。未指定時は既定アイコンを表示する。 */
   iconAsset: string;
+  /** 対戦時に適用するカラー選択。Blenderスプライトの色オーバーレイにも使用する。 */
+  colorVariant: ColorVariant;
   primaryColor: number;
   accentColor: number;
+  /** 実数ポイントで扱う最大HP。moves.csv の damage と同じ単位を使用する。 */
   maxHealth: number;
   walkSpeed: number;
   jumpVelocity: number;
