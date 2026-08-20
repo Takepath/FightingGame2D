@@ -74,6 +74,50 @@ export class CpuController {
 
   public constructor(private readonly level: CpuLevel) {}
 
+  /** コマンド技の途中入力を破棄し、次の判断を最初から始める。 */
+  public reset(): void {
+    this.hadokenStep = 0;
+  }
+
+  /**
+   * CPU Lv3 と同じ技選択だけを返す。
+   * トレーニング用で移動・ジャンプ設定を残したまま、通常技・投げ・コマンド技を再利用する。
+   */
+  public sampleLevelThreeAttack(
+    frame: number,
+    self: FighterState,
+    opponent: FighterState,
+  ): FrameInput {
+    if (self.action === "ko" || self.stun > 0 || self.activeMoveId) {
+      this.hadokenStep = 0;
+      return { buttons: 0 };
+    }
+
+    if (this.hadokenStep > 0) {
+      return { buttons: this.continueHadoken(self) };
+    }
+
+    const distance = Math.abs(self.x - opponent.x) / POSITION_SCALE;
+    const template =
+      CPU_CHARACTER_TEMPLATES[self.character.id] ??
+      CPU_CHARACTER_TEMPLATES.default;
+    if (
+      distance >= template.specialDistance &&
+      frame % template.specialInterval === 0
+    ) {
+      return { buttons: this.startHadoken() };
+    }
+    return {
+      buttons: this.levelThreeAttackInput(
+        frame,
+        self,
+        opponent,
+        distance,
+        template,
+      ),
+    };
+  }
+
   /**
    * 現在の戦況からP2の入力を決定する。
    * 乱数を使わず、同じフレーム・状態では常に同じ入力を返す。
@@ -109,7 +153,13 @@ export class CpuController {
       };
     }
     return {
-      buttons: this.levelThreeInput(frame, self, distance, projectiles),
+      buttons: this.levelThreeInput(
+        frame,
+        self,
+        opponent,
+        distance,
+        projectiles,
+      ),
     };
   }
 
@@ -147,6 +197,7 @@ export class CpuController {
   private levelThreeInput(
     frame: number,
     self: FighterState,
+    opponent: FighterState,
     distance: number,
     projectiles: readonly ProjectileState[],
   ): number {
@@ -164,9 +215,37 @@ export class CpuController {
       return this.startHadoken();
     }
     if (distance > template.preferredDistance + 22) return this.toward(self);
+    const attackButtons = this.levelThreeAttackInput(
+      frame,
+      self,
+      opponent,
+      distance,
+      template,
+    );
+    // 押し込み判定が重なる密着距離では、Lv3 が通常技より投げを優先する。
+    if (attackButtons !== 0) return attackButtons;
     if (distance < template.retreatDistance) {
       return frame % 32 < 20 ? this.away(self) : 0;
     }
+    return attackButtons;
+  }
+
+  /** CPU Lv3 が距離・フレームから選ぶ攻撃のみを決定する。 */
+  private levelThreeAttackInput(
+    frame: number,
+    self: FighterState,
+    opponent: FighterState,
+    distance: number,
+    template: CpuCharacterTemplate,
+  ): number {
+    if (distance > template.preferredDistance + 22) return 0;
+    if (
+      this.isThrowRange(self, opponent) &&
+      frame % template.attackInterval === 0
+    ) {
+      return InputButton.Throw;
+    }
+    if (distance < template.retreatDistance) return 0;
     if (
       distance <= template.heavyRange &&
       frame % template.attackInterval === 0
@@ -177,6 +256,19 @@ export class CpuController {
       return InputButton.Light;
     }
     return 0;
+  }
+
+  /** シミュレーションの投げ可能距離と同じ、押し込み判定の重なりを確認する。 */
+  private isThrowRange(self: FighterState, opponent: FighterState): boolean {
+    const verticalRange = 96 * POSITION_SCALE;
+    const horizontalRange =
+      ((self.character.hurtboxWidth + opponent.character.hurtboxWidth) / 2 +
+        16) *
+      POSITION_SCALE;
+    return (
+      Math.abs(self.y - opponent.y) < verticalRange &&
+      Math.abs(self.x - opponent.x) <= horizontalRange
+    );
   }
 
   /** 波動拳コマンドの最初の「下」入力を開始する。 */

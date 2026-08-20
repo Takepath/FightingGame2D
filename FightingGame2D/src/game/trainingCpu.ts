@@ -1,3 +1,4 @@
+import { CpuController } from "./cpu";
 import { GROUND_Y, POSITION_SCALE, type FighterState } from "./simulation";
 import { type FrameInput, InputButton } from "./types";
 
@@ -11,7 +12,13 @@ export type TrainingJumpMode = "always" | "random" | "never";
 export type TrainingMoveMode = "standing" | "forward" | "backward" | "random";
 
 /** トレーニングCPUの攻撃行動。 */
-export type TrainingAttackMode = "none" | "light" | "heavy" | "special";
+export type TrainingAttackMode =
+  | "none"
+  | "light"
+  | "heavy"
+  | "special"
+  | "throw"
+  | "random";
 
 /** オプション画面で変更する、トレーニングCPUの行動設定。 */
 export interface TrainingCpuSettings {
@@ -49,9 +56,14 @@ export class TrainingCpuController {
   /** 相手技ごとに確定するランダムガード姿勢。 */
   private randomGuardStance: GuardStance = "standing";
 
+  /** ランダム攻撃時に、波動拳コマンドを含む CPU Lv3 の入力列を生成する。 */
+  private readonly levelThreeAttackCpu = new CpuController(3);
+
   /** トレーニングCPUの行動設定を更新する。 */
   public setSettings(settings: TrainingCpuSettings): void {
     this.settings = { ...settings };
+    // 設定変更後に途中までのコマンド入力を持ち越さない。
+    this.levelThreeAttackCpu.reset();
   }
 
   /** 現在の行動設定を、画面表示用に複製して返す。 */
@@ -94,7 +106,22 @@ export class TrainingCpuController {
     }
 
     buttons |= this.jumpInput(frame, self);
-    buttons |= this.attackInput(frame);
+    if (this.settings.attack === "random") {
+      // CPU Lv3 のコマンド技中は方向入力も必要なため、設定済み移動より攻撃入力を優先する。
+      const attackButtons = this.levelThreeAttackCpu.sampleLevelThreeAttack(
+        frame,
+        self,
+        opponent,
+      ).buttons;
+      const commandDirections =
+        InputButton.Left | InputButton.Right | InputButton.Down;
+      if ((attackButtons & commandDirections) !== 0) {
+        buttons &= ~commandDirections;
+      }
+      buttons |= attackButtons;
+    } else {
+      buttons |= this.attackInput(frame);
+    }
     return { buttons };
   }
 
@@ -160,6 +187,7 @@ export class TrainingCpuController {
     if (this.settings.attack === "light") return InputButton.Light;
     if (this.settings.attack === "heavy") return InputButton.Heavy;
     if (this.settings.attack === "special") return InputButton.Special;
+    if (this.settings.attack === "throw") return InputButton.Throw;
     return 0;
   }
 

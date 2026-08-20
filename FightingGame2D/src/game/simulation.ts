@@ -32,6 +32,8 @@ const THROW_SELF_KNOCKBACK_DISTANCE = 320 * POSITION_SCALE;
 const THROW_TECH_KNOCKBACK_DISTANCE = 120 * POSITION_SCALE;
 /** 投げ抜け時に両者へ与える横方向のノックバック速度。 */
 const THROW_TECH_KNOCKBACK_SPEED = (780 * POSITION_SCALE) / 60;
+/** 後ろ投げ後、強攻撃の最大リーチに加えて確保する余白。 */
+const BACK_THROW_HEAVY_RANGE_MARGIN = 12 * POSITION_SCALE;
 /** ガード解除や技選択で扱う、全攻撃ボタンのビット集合。 */
 const ATTACK_BUTTON_MASK =
   InputButton.Light |
@@ -54,8 +56,17 @@ export const FRAMES_PER_SECOND = 60;
 /** 必殺技ゲージの最大値。HUDとCSVの消費量もこの値を上限にする。 */
 export const MAX_SPECIAL_GAUGE = 100;
 
+/** 超必殺ゲージの最大値。技を使うたびにCSV指定量を加算する。 */
+export const MAX_SUPER_GAUGE = 300;
+
 /** 必殺技ゲージを1ポイント回復するまでの固定フレーム数（毎秒1ポイント）。 */
 const SPECIAL_GAUGE_RECOVERY_FRAMES = FRAMES_PER_SECOND;
+
+/** ヒットスタンがこの値を超えた実ヒットで、ヒットストップを開始する。 */
+const HIT_STOP_HITSTUN_THRESHOLD = 30;
+
+/** 強い攻撃が命中した後、ゲーム進行を静止する固定フレーム数。 */
+export const HIT_STOP_FRAMES = 5;
 
 /** 1試合は最大3ラウンドで決着する。 */
 export const MAX_ROUNDS = 3;
@@ -129,6 +140,8 @@ export interface FighterState {
   specialGauge: number;
   /** 必殺技ゲージを1ポイント回復するまでに経過した固定フレーム数。 */
   specialGaugeRecoveryFrames: number;
+  /** 最大300で管理する超必殺ゲージ。ラウンド開始時は0で、技の使用で増加する。 */
+  superGauge: number;
   action: FighterAction;
   actionFrame: number;
   activeMoveId: string | null;
@@ -208,6 +221,8 @@ export class MatchSimulation implements DeterministicSimulation {
   public roundTimeFrames = ROUND_TIME_SECONDS * FRAMES_PER_SECOND;
   /** トレーニングでKO後に全回復・再開するまでの固定フレーム数。 */
   public trainingResetFrames = 0;
+  /** 強い攻撃の命中後に残る、入力・物理・時計を静止するフレーム数。 */
+  public hitStopFrames = 0;
   public readonly projectiles: ProjectileState[] = [];
   /** キャラクターごとに利用可能な技をCSV順で保持する索引。 */
   private readonly movesByCharacter = new Map<
@@ -225,6 +240,9 @@ export class MatchSimulation implements DeterministicSimulation {
   private readonly inputHistoryLimit: number;
   /** トレーニング中、P1の攻撃後にP2の体力を即時回復するか。 */
   private trainingAutoRecovery = false;
+
+  /** トレーニング中、P1が技を使った直後に必殺技ゲージを最大へ戻すか。 */
+  private trainingAutoSpecialGaugeRecovery = false;
 
   public constructor(
     private readonly characters: readonly [
@@ -251,6 +269,11 @@ export class MatchSimulation implements DeterministicSimulation {
 
   public step(inputs: readonly [FrameInput, FrameInput]): void {
     /** 60Hzの固定フレームでラウンド演出・時計・戦闘を決定論的に処理する。 */
+    if (this.hitStopFrames > 0) {
+      // ヒットストップ中は全ファイター・飛び道具・時計を進めず、画面を固定する。
+      this.hitStopFrames -= 1;
+      return;
+    }
     if (this.training && this.trainingResetFrames > 0) {
       this.trainingResetFrames -= 1;
       if (this.trainingResetFrames === 0) this.resetTrainingFighters();
@@ -311,6 +334,7 @@ export class MatchSimulation implements DeterministicSimulation {
     this.roundIntroFrames = this.training ? 0 : ROUND_INTRO_FRAMES;
     this.roundTimeFrames = ROUND_TIME_SECONDS * FRAMES_PER_SECOND;
     this.trainingResetFrames = 0;
+    this.hitStopFrames = 0;
     this.projectiles.length = 0;
     this.resetFighters();
   }
@@ -318,6 +342,11 @@ export class MatchSimulation implements DeterministicSimulation {
   /** トレーニング用の敵体力自動回復をオン・オフする。 */
   public setTrainingAutoRecovery(enabled: boolean): void {
     if (this.training) this.trainingAutoRecovery = enabled;
+  }
+
+  /** トレーニング用の自キャラ必殺技ゲージ自動回復をオン・オフする。 */
+  public setTrainingAutoSpecialGaugeRecovery(enabled: boolean): void {
+    if (this.training) this.trainingAutoSpecialGaugeRecovery = enabled;
   }
 
   /**
@@ -349,6 +378,7 @@ export class MatchSimulation implements DeterministicSimulation {
       // ラウンド開始時は、両者の必殺技ゲージを最大値から開始する。
       specialGauge: MAX_SPECIAL_GAUGE,
       specialGaugeRecoveryFrames: 0,
+      superGauge: 0,
       action: "idle",
       actionFrame: 0,
       activeMoveId: null,
@@ -722,19 +752,39 @@ export class MatchSimulation implements DeterministicSimulation {
   ): MoveDefinition | undefined {
     /** 現在または先行入力の攻撃ボタンと地上・空中状態から、CSVコマンド技を優先して選ぶ。 */
     const candidates = this.movesByCharacter.get(fighter.character.id) ?? [];
+    let selectedCommandMove: MoveDefinition | undefined;
+    let selectedPriority = -1;
+    let selectedSequenceLength = -1;
     for (const move of candidates) {
+      if (move.useState !== "any" && move.useState !== useState) {
+        continue;
+      }
       if (
-        (move.useState === "any" || move.useState === useState) &&
-        move.commandIds.length > 0 &&
-        this.hasSpecialGaugeForMove(fighter, move) &&
-        move.commandIds.some((commandId) =>
-          this.matchesCommand(fighter, commandId),
-        ) &&
-        (attackButtons & move.button) !== 0
+        move.commandIds.length === 0 ||
+        !this.hasSpecialGaugeForMove(fighter, move) ||
+        (attackButtons & move.button) === 0
       ) {
-        return move;
+        continue;
+      }
+
+      for (const commandId of move.commandIds) {
+        const command = this.commandsById.get(commandId);
+        if (!command || !this.matchesCommand(fighter, commandId)) continue;
+
+        // 優先度、次に入力列の長さで比較する。同値ならCSVの先行行を維持して決定論性を保つ。
+        const isHigherPriority = command.priority > selectedPriority;
+        const isLongerAtSamePriority =
+          command.priority === selectedPriority &&
+          command.sequence.length > selectedSequenceLength;
+        if (!isHigherPriority && !isLongerAtSamePriority) continue;
+
+        selectedCommandMove = move;
+        selectedPriority = command.priority;
+        selectedSequenceLength = command.sequence.length;
       }
     }
+    if (selectedCommandMove) return selectedCommandMove;
+
     for (const move of candidates) {
       if (
         (move.useState === "any" || move.useState === useState) &&
@@ -757,6 +807,21 @@ export class MatchSimulation implements DeterministicSimulation {
     /** 選択済みの技を開始し、命中・飛び道具生成用の状態をリセットする。 */
     // 技を開始したフレームにだけCSV指定の必殺技ゲージを消費する。
     fighter.specialGauge -= move.specialGaugeCost;
+    // 超必殺ゲージは命中の有無にかかわらず、技を開始した時点でCSV指定量だけ蓄積する。
+    fighter.superGauge = Math.min(
+      MAX_SUPER_GAUGE,
+      fighter.superGauge + move.superGaugeGain,
+    );
+    if (
+      this.training &&
+      this.trainingAutoSpecialGaugeRecovery &&
+      fighter.player === 0 &&
+      move.specialGaugeCost > 0
+    ) {
+      // 自キャラが必殺技ゲージを使った直後に満タンへ戻し、連続した技検証を可能にする。
+      fighter.specialGauge = MAX_SPECIAL_GAUGE;
+      fighter.specialGaugeRecoveryFrames = 0;
+    }
     // 実行した技の攻撃ボタンは先行入力履歴から消費し、同じ押下の再実行を防ぐ。
     this.consumeBufferedActions(fighter, move.button);
     fighter.activeMoveId = move.id;
@@ -1019,10 +1084,11 @@ export class MatchSimulation implements DeterministicSimulation {
     attacker.attackConnected = true;
 
     if (backwardThrow) {
-      // 後ろ入力投げは両者の位置を入れ替え、投げ後の向きは次の更新で再計算する。
+      // 後ろ入力投げは位置を入れ替えた後、両者の強攻撃が届かない間隔まで離す。
       const attackerX = attacker.x;
       attacker.x = defender.x;
       defender.x = attackerX;
+      this.separateAfterBackwardThrow(attacker, defender);
       attacker.velocityX = 0;
       defender.velocityX = 0;
       return;
@@ -1047,6 +1113,47 @@ export class MatchSimulation implements DeterministicSimulation {
       this.hurtboxHalfWidth(defender) +
       PUSHBOX_PADDING * 2;
     return Math.abs(attacker.x - defender.x) <= pushDistance;
+  }
+
+  /**
+   * 後ろ投げ後に、両者の近接強攻撃が届かない中心間距離まで位置を離す。
+   * キャラクター固有CSVのrange_xを参照するため、強攻撃のリーチを変更しても追従する。
+   */
+  private separateAfterBackwardThrow(
+    attacker: FighterState,
+    defender: FighterState,
+  ): void {
+    const maximumHeavyReach = Math.max(
+      this.maximumHeavyMeleeReach(attacker),
+      this.maximumHeavyMeleeReach(defender),
+    );
+    const requiredSeparation = Math.min(
+      RIGHT_WALL - LEFT_WALL,
+      this.hurtboxHalfWidth(attacker) +
+        this.hurtboxHalfWidth(defender) +
+        PUSHBOX_PADDING * 2 +
+        maximumHeavyReach * POSITION_SCALE +
+        BACK_THROW_HEAVY_RANGE_MARGIN,
+    );
+    // 入れ替え後に攻撃側がいる方向へ距離を伸ばし、ステージ端なら相手側を動かす。
+    const direction = attacker.x >= defender.x ? 1 : -1;
+    const movedAttackerX = defender.x + direction * requiredSeparation;
+    if (movedAttackerX >= LEFT_WALL && movedAttackerX <= RIGHT_WALL) {
+      attacker.x = movedAttackerX;
+      return;
+    }
+    defender.x = this.clampToStage(attacker.x - direction * requiredSeparation);
+  }
+
+  /** 指定キャラクターが持つ近接強攻撃の、CSV上の最大range_xを返す。 */
+  private maximumHeavyMeleeReach(fighter: FighterState): number {
+    const moves = this.movesByCharacter.get(fighter.character.id) ?? [];
+    return moves.reduce((maximum, move) => {
+      if (move.button !== InputButton.Heavy || move.attackType !== "melee") {
+        return maximum;
+      }
+      return Math.max(maximum, move.rangeX);
+    }, 0);
   }
 
   /** 相手が投げの発生中かを調べ、同時入力を投げ抜けとして扱う。 */
@@ -1222,6 +1329,10 @@ export class MatchSimulation implements DeterministicSimulation {
       guardStance !== null &&
       this.canGuardAttack(guardStance, attack.attackLevel);
     if (!defending) {
+      if (attack.hitstun > HIT_STOP_HITSTUN_THRESHOLD) {
+        // 同一フレームに複数の強い攻撃が重なっても、静止時間は常に5Fに固定する。
+        this.hitStopFrames = Math.max(this.hitStopFrames, HIT_STOP_FRAMES);
+      }
       const hitCount = comboContinuation ? defender.comboHitCount + 1 : 1;
       const starterProration = comboContinuation
         ? defender.comboStarterProration

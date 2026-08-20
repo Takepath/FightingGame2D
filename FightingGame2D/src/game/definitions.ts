@@ -223,6 +223,8 @@ function parseMoves(source: string): MoveDefinition[] {
     specialGaugeCost: row.special_gauge_cost
       ? Number(row.special_gauge_cost)
       : 0,
+    // 技を開始した時点で加算する超必殺ゲージ量。空欄は0として既存CSVとも互換にする。
+    superGaugeGain: row.super_gauge_gain ? Number(row.super_gauge_gain) : 0,
     // guard_bleak=trueの技は後ろ入力ガードを無視してダメージを与える。
     guardPiercing: toGuardBleak(row.guard_bleak),
     // コンボ始動補正は未指定時を0%として扱い、従来CSVも読み込めるようにする。
@@ -290,6 +292,8 @@ function parseCommands(source: string): CommandDefinition[] {
       (token) => !commandDirections.has(token as CommandDirection),
     );
     const maxFrames = Number(row.max_frames);
+    // priority未指定の旧CSVは0として読み込み、既存のコマンド定義を壊さない。
+    const priority = row.priority ? Number(row.priority) : 0;
 
     if (!id) {
       throw new Error(
@@ -309,11 +313,17 @@ function parseCommands(source: string): CommandDefinition[] {
         `commands.csv の ${id} の max_frames は入力間隔を満たす整数にしてください`,
       );
     }
+    if (!Number.isInteger(priority) || priority < 0 || priority > 100) {
+      throw new Error(
+        `commands.csv の ${id} の priority は0〜100の整数を指定してください`,
+      );
+    }
 
     return {
       id,
       sequence: sequence as CommandDirection[],
       maxFrames,
+      priority,
     };
   });
 }
@@ -427,6 +437,15 @@ export async function loadGameData(
     ) {
       throw new Error(
         `moves.csv の ${move.id} の special_gauge_cost は0〜100の整数を指定してください`,
+      );
+    }
+    if (
+      !Number.isInteger(move.superGaugeGain) ||
+      move.superGaugeGain < 0 ||
+      move.superGaugeGain > 300
+    ) {
+      throw new Error(
+        `moves.csv の ${move.id} の super_gauge_gain は0〜300の整数を指定してください`,
       );
     }
     if (!Number.isInteger(move.starterProration)) {

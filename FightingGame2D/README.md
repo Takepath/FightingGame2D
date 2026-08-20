@@ -1,5 +1,7 @@
 # Frame Fighters
 
+CSVの全設定項目は [CSV設定項目一覧](public/data/CSV設定項目一覧.txt) を参照してください。
+
 Google Chromeで動く、CPU対戦・トレーニング・オンライン対戦対応の2D格闘ゲームです。PixiJSが描画を担い、対戦ロジックは描画フレームから切り離した60Hz固定ステップで動作します。
 
 ## 設定と再利用
@@ -89,8 +91,9 @@ Top画面で「ローカル対戦」を選ぶと、キャラクター選択画�
 
 - 描画Tickerを最大60FPSに制限し、ゲームロジックは常に `1000 / 60ms` の固定ステップで実行します。
 - 攻撃・必殺技・ジャンプは、行動可能になる5フレーム前の新規押下まで先行入力として保持します。
+- ガードされていない技で `hitstun` が31F以上の場合、5Fのヒットストップと `data/sounds/slap-1.mp3` の打撃音を再生します。
 - 各ステップの入力をビットフラグのスナップショットとして複製してからシミュレーションします。同じフレーム入力列なら同じ状態になるため、ロックステップ同期に利用できます。
-- `public/data/characters.csv` がキャラクター、`public/data/moves.csv` が技の開始・持続・硬直・ダメージ・リーチ等を管理します。`max_health` と `damage` は同じ実数HPポイントです。たとえば `damage=500` は500ダメージとなり、割合換算は行いません。必殺技ゲージは最大100でラウンド開始時に満タン、対戦中は毎秒1ポイント回復します。`special_gauge_cost` は技ごとの消費量（0〜100）で、残量不足時はその技を発動・キャンセルできません。`button` は `light`・`heavy`・`special`・`throw` を設定でき、`guard_bleak` は `true` でガードを貫通、`false` で通常のガード判定にします。`starter_proration` はコンボ始動時の補正率で、`20` は120%、`-10` は90%からコンボ減衰を開始します。キャラクター選択はCSVの2〜25体をそのまま表示し、少ないほどアイコンを大きく表示します。`characters.csv` の `icon_asset` には `public` 配下のPNGパス（例: `data/icons/hero.png`）を登録でき、未指定・読込失敗時は既定アイコンを表示します。`hurtbox_width / hurtbox_top / hurtbox_bottom` で本体に沿う被弾判定を調整できます。`moves.csv` の `use_state` は `ground`（地上）、`air`（空中）、`any`（両方）を指定できます。`attack_level` は `high`（立ちガードのみ可）・`mid`（立ち／しゃがみガード可）・`low`（しゃがみガードのみ可）を指定します。起動時にCSVを読み込みます。
+- `public/data/characters.csv` がキャラクター、`public/data/moves.csv` が技の開始・持続・硬直・ダメージ・リーチ等を管理します。`max_health` と `damage` は同じ実数HPポイントです。たとえば `damage=500` は500ダメージとなり、割合換算は行いません。必殺技ゲージは最大100でラウンド開始時に満タン、対戦中は毎秒1ポイント回復します。`special_gauge_cost` は技ごとの消費量（0〜100）で、残量不足時はその技を発動・キャンセルできません。超必殺ゲージは最大300でラウンド開始時は0です。`super_gauge_gain` は技を開始した時点で加算される量（0〜300）で、最大値を超えません。`button` は `light`・`heavy`・`special`・`throw` を設定でき、`guard_bleak` は `true` でガードを貫通、`false` で通常のガード判定にします。`starter_proration` はコンボ始動時の補正率で、`20` は120%、`-10` は90%からコンボ減衰を開始します。キャラクター選択はCSVの2〜25体をそのまま表示し、少ないほどアイコンを大きく表示します。`characters.csv` の `icon_asset` には `public` 配下のPNGパス（例: `data/icons/hero.png`）を登録でき、未指定・読込失敗時は既定アイコンを表示します。`hurtbox_width / hurtbox_top / hurtbox_bottom` で本体に沿う被弾判定を調整できます。`moves.csv` の `use_state` は `ground`（地上）、`air`（空中）、`any`（両方）を指定できます。`attack_level` は `high`（立ちガードのみ可）・`mid`（立ち／しゃがみガード可）・`low`（しゃがみガードのみ可）を指定します。起動時にCSVを読み込みます。
 - `blender_hero` と `stickMan` はプログラム描画の棒人間です。`crocodile_soldier` は `crocodile_soldier.json` のスプライトポーズを再生する、Blenderアニメーション対応キャラクターです。
 
 ## 技中移動CSV
@@ -106,12 +109,15 @@ Top画面で「ローカル対戦」を選ぶと、キャラクター選択画�
 | `command_id`      | 技から参照する重複しないID                                        |
 | `sequence`        | `>` 区切りの方向入力順序                                          |
 | `max_frames`      | 最初の方向入力から最後の攻撃ボタンまでの猶予（60FPS固定フレーム） |
+| `priority`        | 同じ攻撃ボタンで複数コマンドが成立した場合の優先度（0〜100）      |
+
+複数コマンドが同時に成立した時は、`priority` が大きい技を選びます。同値の場合は入力列が長い方、それも同値なら `moves.csv` の先行行を選ぶため、対戦同期でも結果が一定です。
 
 `sequence` はテンキー表記で入力します。`5` はニュートラル、`6` は前、`4` は後ろ、`8` は上、`2` は下、`9`・`7`・`3`・`1` はそれぞれ斜め前上・斜め後上・斜め前下・斜め後下です。前後・斜め前後はキャラクターの現在の向きを基準に解釈されるため、自動振り向き後も同じCSV定義を使えます。`sequence` の最後の方向と同時、または最後の方向入力から2フレーム以内に、`moves.csv` の `button` を新たに押すと発動します。
 
 ```csv
-command_id,sequence,max_frames
-hadoken,2>3>6,18
+command_id,sequence,max_frames,priority
+hadoken,2>3>6,18,10
 ```
 
 この例を `moves.csv` の `hadoken` 行の `command_id` に設定しています。未定義ID、重複ID、不正な方向名や猶予値は起動時に検出します。

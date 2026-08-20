@@ -1,0 +1,143 @@
+Fighting Game 2D - data 配下 CSV設定項目一覧
+================================================
+
+このファイルは public/data 配下のCSVで設定できる項目をまとめたものです。
+ゲームは起動時にこれらのCSVを読み込みます。値を変更した後はブラウザを再読み込みしてください。
+
+■ 共通ルール
+
+- 文字コードは UTF-8 を使用してください。
+- 1行目は列名です。列の順序と列名は変更しないでください。
+- 値にカンマを含める場合は、値全体を半角の二重引用符（"）で囲みます。
+- ファイルの参照先は public からの相対パスです。例: data/projectiles/take.png
+- フレーム数はすべて固定60 FPS（1フレーム = 1/60秒）で扱います。
+- 数値を省略した場合は、項目ごとに定められた既定値になるか、0として扱われます。必須項目は省略しないでください。
+
+
+1. characters.csv
+-----------------
+
+キャラクターの基本能力、当たり判定、選択画面の見た目を定義します。idは他のCSVの
+character_idから参照されるため、既存のidを変更する場合は moves.csv も合わせて変更してください。
+
+列名                 内容
+id                   キャラクターを識別する一意のIDです。英数字とアンダースコアを推奨します。
+name                 対戦画面・選択画面に表示するキャラクター名です。
+render_type          描画方式です。stick はプログラム描画の棒人間、blender はBlenderアニメーションJSONを使用します。
+animation_asset      render_type=blender のときに読み込むアニメーションJSONのパスです。stickでは空欄にできます。
+icon_asset           キャラクター選択画面のPNGアイコンのパスです。空欄の場合は既定アイコンを使用します。
+primary_color        キャラクターの基本色です。#RRGGBB形式で指定します。カラー選択の「デフォルト」に使われます。
+accent_color         キャラクターの差し色です。#RRGGBB形式で指定します。カラー選択の「デフォルト」に使われます。
+max_health           最大体力です。HPバーおよびラウンド開始時の体力に使用する正の数値です。
+walk_speed           前進時の移動速度です。単位はピクセル/秒です。後退速度はこの値の1/3になります。
+jump_velocity        ジャンプ開始時の上向き速度です。単位はピクセル/秒です。大きいほど高く跳びます。
+hurtbox_width        被攻撃判定の横幅です。単位はピクセルです。空欄または0は既定値52になります。
+hurtbox_top          被攻撃判定の上端です。足元（地面位置）から上方向の距離をピクセルで指定します。空欄または0は既定値150になります。
+hurtbox_bottom       被攻撃判定の下端です。足元（地面位置）から上方向の距離をピクセルで指定します。空欄または0は既定値24になります。
+
+記入例
+id,name,render_type,animation_asset,icon_asset,primary_color,accent_color,max_health,walk_speed,jump_velocity,hurtbox_width,hurtbox_top,hurtbox_bottom
+sample,SAMPLE,stick,,,#4FD8FF,#FFC857,10000,330,1900,52,120,0
+
+
+2. commands.csv
+---------------
+
+必殺技などの方向入力コマンドを定義します。moves.csv の command_id から参照します。
+同じタイミングで複数のコマンドが成立する場合は、priority が大きいもの、次に入力列が長いもの、
+最後に moves.csv で先に書かれたものが選ばれます。
+
+列名                 内容
+command_id           コマンドを識別する一意のIDです。moves.csv の command_id に記入します。
+sequence             テンキー表記の入力列です。入力同士は > で区切ります。例: 2>3>6 は波動拳入力です。
+max_frames           最初の方向入力から最後の方向入力までに許される最大フレーム数です。入力数-1以上の整数を指定します。
+priority             同時成立時の優先度です。0～100の整数です。大きいほど優先されます。
+
+テンキー表記（向きに対して相対）
+7: 斜め後ろ上   8: 上       9: 斜め前上
+4: 後ろ         5: ニュートラル 6: 前
+1: 斜め後ろ下   2: 下       3: 斜め前下
+
+最後の方向入力後、攻撃ボタンを押すまでには2フレームの猶予があります。
+例: 2>3>6,27,10 は、27フレーム以内に下・斜め前下・前を入力するコマンドです。
+
+
+3. moves.csv
+-------------
+
+通常技、必殺技、投げ、飛び道具を定義します。1行が1つの技です。
+startup、active、recovery、hitstun、projectile_lifetime は60 FPS基準のフレーム数です。
+
+列名                 内容
+character_id         技を使用できるキャラクターのIDです。characters.csv の id を指定します。all を指定すると共通技になります。
+move_id              キャラクター内で一意の技IDです。ゲーム内の識別に使用します。
+button               発動ボタンです。light（弱）、heavy（強）、special（必殺）、throw（投げ）から指定します。
+startup              攻撃ボタンを押してから攻撃判定が出るまでのフレーム数です。
+active               攻撃判定が有効なフレーム数です。このフレーム数を超えて攻撃は当たりません。
+recovery             攻撃判定終了後の硬直フレーム数です。
+damage               与えるダメージの実数値です。例: 500 は500ダメージです。0以上の整数を指定します。
+special_gauge_cost   必殺技ゲージの消費量です。0～100で指定します。発動時に不足している技は出せません。
+super_gauge_gain     超必殺ゲージの増加量です。0～300で指定します。技を出した時に加算され、最大値は300です。
+guard_bleak          ガード貫通かどうかです。true でガード不能、false で通常のガード判定を行います。投げにも true を指定します。
+starter_proration    始動補正です。コンボの初期倍率を増減する整数です。20なら120%、-10なら90%、0なら100%です。下限は10%です。
+range_x              近接攻撃判定の前方への届く距離です。単位はピクセルです。押し込み判定が発生する位置から測ります。
+range_y              近接攻撃判定の上下方向の許容距離です。単位はピクセルです。空中攻撃・対空技の高さに合わせます。
+self_move_x          技中に自キャラを前方へ動かす速度です。単位はピクセル/秒です。正の値で前方、負の値で後方へ動きます。
+self_move_y          技中に自キャラを上下へ動かす速度です。単位はピクセル/秒です。正の値で上方、負の値で下方へ動きます。
+knockback_x          ヒットした相手を横へ押し出す強さです。0で横方向のノックバックなしです。
+knockback_y          ヒットした相手を上へ打ち上げる強さです。正の値で打ち上げ、0で打ち上げなしです。
+hitstun              ヒットした相手が行動できなくなるフレーム数です。30を超える非ガードヒットでは5フレームの演出停止が入ります。
+animation            技中に再生するアニメーション名です。idle、walk、jump、light、heavy、special、hit、block、ko を指定します。
+attack_type          攻撃の種類です。melee は近接攻撃、projectile は飛び道具です。
+projectile_speed     attack_type=projectile の飛行速度です。単位はピクセル/秒です。meleeでは0にします。
+projectile_lifetime  attack_type=projectile の存続時間です。単位はフレームです。meleeでは0にします。
+use_state            技を出せる状態です。ground（地上のみ）、air（空中のみ）、any（地上・空中）から指定します。
+attack_level         攻撃属性です。high はしゃがみガード不可、low は立ちガード不可、mid は両方でガード可能です。
+projectile_id        attack_type=projectile の見た目を指定します。projectiles.csv の id を指定します。meleeでは空欄にします。
+command_id           必殺技コマンドです。commands.csv の command_id を指定します。空欄はボタンだけで発動します。複数指定は | 区切りで、いずれかのコマンドで発動します。
+cancel_into          この技からキャンセルして出せる攻撃種別です。light、heavy、special、throw を | 区切りで指定します。空欄はキャンセル不可です。
+
+記入例（波動拳）
+character_id,move_id,button,startup,active,recovery,damage,special_gauge_cost,super_gauge_gain,guard_bleak,starter_proration,range_x,range_y,self_move_x,self_move_y,knockback_x,knockback_y,hitstun,animation,attack_type,projectile_speed,projectile_lifetime,use_state,attack_level,projectile_id,command_id,cancel_into
+sample,hadoken,special,13,7,25,500,10,15,false,0,0,0,0,0,300,0,15,special,projectile,720,110,ground,mid,hadoken_blue,hadoken,
+
+設定上の注意
+- command_id を持つ必殺技も、cancel_into に special が含まれる技からはコマンド入力なしでキャンセルできます。
+- 投げは密着時に使用します。相手も発生10フレーム中に投げ入力をすると投げ抜けになります。
+- コンボ中は、1・2ヒット目は100%、3ヒット目は80%、以降は70%から減衰し、最低10%の補正でダメージが計算されます。
+
+
+4. projectiles.csv
+------------------
+
+飛び道具の見た目を定義します。moves.csv で attack_type=projectile にし、projectile_idから参照します。
+
+列名                 内容
+id                   飛び道具を識別する一意のIDです。moves.csv の projectile_id に記入します。
+render_type          描画方式です。circle は3重円のプログラム描画、sprite はPNG画像を表示します。
+asset                render_type=sprite のPNG画像のパスです。circleでは空欄にします。
+width                spriteの表示幅です。単位はピクセルです。空欄または0は既定値44になります。circleでは使用しません。
+height               spriteの表示高です。単位はピクセルです。空欄または0は既定値44になります。circleでは使用しません。
+outer_radius         circleの外側の円の半径です。単位はピクセルです。spriteでは使用しません。
+middle_radius        circleの中間の円の半径です。単位はピクセルです。spriteでは使用しません。
+core_radius          circleの中心の円の半径です。単位はピクセルです。spriteでは使用しません。
+outer_color          circleの外側の色です。#RRGGBB形式です。spriteでは使用しません。
+middle_color         circleの中間の色です。#RRGGBB形式です。spriteでは使用しません。
+core_color           circleの中心の色です。#RRGGBB形式です。spriteでは使用しません。
+
+記入例（画像を使う飛び道具）
+id,render_type,asset,width,height,outer_radius,middle_radius,core_radius,outer_color,middle_color,core_color
+my_fireball,sprite,data/projectiles/my_fireball.png,96,64,0,0,0,#FFFFFF,#FFFFFF,#FFFFFF
+
+記入例（3重円で描画する飛び道具）
+id,render_type,asset,width,height,outer_radius,middle_radius,core_radius,outer_color,middle_color,core_color
+my_orb,circle,,44,44,22,14,7,#4FD8FF,#72E7FF,#E8F8FF
+
+
+追加時の確認手順
+----------------
+
+1. 参照先のキャラクター、コマンド、飛び道具を必要に応じて先にCSVへ追加します。
+2. moves.csvへ技を1行追加し、参照IDの綴りが一致していることを確認します。
+3. npm run build を実行してCSVの形式・参照IDに関するエラーがないことを確認します。
+4. ブラウザを再読み込みし、キャラクター選択と対戦中の表示・当たり判定を確認します。

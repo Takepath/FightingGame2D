@@ -58,6 +58,8 @@ export interface CommandDefinition {
   sequence: readonly CommandDirection[];
   /** 最初の方向入力から攻撃ボタンまでに許容する固定フレーム数。 */
   maxFrames: number;
+  /** 同じ攻撃ボタンで複数コマンドが成立した時に優先する値。大きいほど優先。 */
+  priority: number;
 }
 
 export interface MoveDefinition {
@@ -71,6 +73,8 @@ export interface MoveDefinition {
   damage: number;
   /** 最大100の必殺技ゲージから、技開始時に消費する量。0なら消費しない。 */
   specialGaugeCost: number;
+  /** 最大300の超必殺ゲージへ、技開始時に加算する量。0なら増えない。 */
+  superGaugeGain: number;
   /** trueなら後ろ入力ガードを無視してダメージを与える。投げは必ずtrueにする。 */
   guardPiercing: boolean;
   /** コンボ始動時の補正率。20なら120%、-10なら90%を初期補正率にする。 */

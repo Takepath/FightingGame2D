@@ -127,10 +127,10 @@
           </p>
           <div id="key-config-list" class="key-config-list"></div>
           <p class="key-config-note">
-            Escはキャンセル専用の固定キーです。割り当て変更中に押すと変更を取り消します。
+            EscとXboxコントローラーのHomeはキャンセル専用の固定入力です。割り当て変更中に押すと変更を取り消します。
           </p>
           <p class="key-config-note">
-            相手と反対方向で立ちガード、下＋反対方向でしゃがみガードです。「向き反転」キー＋左右移動キーで向きを反転します。Xbox操作は左スティック／Dパッド、A／X／Bで固定です。
+            相手と反対方向で立ちガード、下＋反対方向でしゃがみガードです。キーボードとXboxコントローラーは一覧のボタンを選んで再設定できます。初期設定ではXboxの左スティック／Dパッド、A／X／B／RTを使用します。
           </p>
           <section
             id="training-cpu-options"
@@ -172,11 +172,20 @@
                   <option value="light">弱のみ</option>
                   <option value="heavy">強のみ</option>
                   <option value="special">技のみ</option>
+                  <option value="throw">投げのみ</option>
+                  <option value="random">ランダム（CPU Lv3）</option>
                 </select>
               </label>
               <label>
                 敵体力自動回復
                 <select id="training-auto-recovery">
+                  <option value="off" selected>OFF</option>
+                  <option value="on">ON</option>
+                </select>
+              </label>
+              <label>
+                自キャラ必殺技ゲージ自動回復
+                <select id="training-auto-special-gauge-recovery">
                   <option value="off" selected>OFF</option>
                   <option value="on">ON</option>
                 </select>

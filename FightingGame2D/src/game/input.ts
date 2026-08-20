@@ -3,6 +3,9 @@ import { type FrameInput, InputButton, type PlayerId } from "./types";
 /** Escは常にキャンセルに使うため、キーコンフィグの対象外とする。 */
 export const FIXED_CANCEL_KEY_CODE = "Escape";
 
+/** Xbox コントローラーの Home（Guide）ボタンは Esc と同じキャンセル操作に固定する。 */
+export const FIXED_CANCEL_GAMEPAD_BUTTON_INDEX = 16;
+
 /** キーコンフィグで変更できるキーボード操作の識別子。 */
 export type KeyboardAction =
   | "left"
@@ -42,6 +45,12 @@ export interface KeyBindingTarget {
   readonly action: KeyboardAction;
 }
 
+/**
+ * Gamepad API の入力を保存する識別子。
+ * button はボタン番号、axis はスティック軸番号と入力方向を表す。
+ */
+export type GamepadBinding = `button:${number}` | `axis:${number}:${-1 | 1}`;
+
 /** キーの重複・予約キーなど、割り当て不可の理由。 */
 export type KeyBindingFailure = "reserved" | "modifier" | "duplicate";
 
@@ -56,8 +65,17 @@ export type KeyBindingResult =
 
 type KeyboardBindings = Record<PlayerId, Record<KeyboardAction, string>>;
 
+/** 1 つの操作へ複数のゲームパッド入力を割り当てるための内部形式。 */
+type GamepadBindings = Record<
+  PlayerId,
+  Record<KeyboardAction, GamepadBinding[]>
+>;
+
 /** ブラウザに保存するキーコンフィグのキー。 */
 const KEYBOARD_CONFIG_STORAGE_KEY = "fighting-game-2d.keyboard-config.v2";
+
+/** ブラウザーに保存する Xbox コントローラー設定のキー。 */
+const GAMEPAD_CONFIG_STORAGE_KEY = "fighting-game-2d.gamepad-config.v1";
 
 /** プレイヤー番号を安全に走査するための定数。 */
 const PLAYERS: readonly PlayerId[] = [0, 1];
@@ -98,6 +116,33 @@ const DEFAULT_KEYBOARD_BINDINGS: KeyboardBindings = {
   },
 };
 
+/**
+ * Xbox コントローラーの初期配置。
+ * 十字キーと左スティックを両方使えるよう、移動には二つの入力を登録する。
+ */
+const DEFAULT_GAMEPAD_BINDINGS: GamepadBindings = {
+  0: {
+    left: ["axis:0:-1", "button:14"],
+    right: ["axis:0:1", "button:15"],
+    up: ["axis:1:-1", "button:12"],
+    down: ["axis:1:1", "button:13"],
+    light: ["button:0"],
+    heavy: ["button:2"],
+    special: ["button:1"],
+    throw: ["button:7"],
+  },
+  1: {
+    left: ["axis:0:-1", "button:14"],
+    right: ["axis:0:1", "button:15"],
+    up: ["axis:1:-1", "button:12"],
+    down: ["axis:1:1", "button:13"],
+    light: ["button:0"],
+    heavy: ["button:2"],
+    special: ["button:1"],
+    throw: ["button:7"],
+  },
+};
+
 /** 初期値を参照渡しせずに使うため、キー配置を複製する。 */
 function cloneKeyboardBindings(): KeyboardBindings {
   return {
@@ -106,9 +151,37 @@ function cloneKeyboardBindings(): KeyboardBindings {
   };
 }
 
+/** 初期ゲームパッド配置を参照共有せずに複製する。 */
+function cloneGamepadBindings(): GamepadBindings {
+  const clonePlayerBindings = (player: PlayerId) =>
+    Object.fromEntries(
+      KEYBOARD_ACTIONS.map(({ action }) => [
+        action,
+        [...DEFAULT_GAMEPAD_BINDINGS[player][action]],
+      ]),
+    ) as Record<KeyboardAction, GamepadBinding[]>;
+
+  return {
+    0: clonePlayerBindings(0),
+    1: clonePlayerBindings(1),
+  };
+}
+
 /** JSONとして復元した値がオブジェクトかを確認する。 */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+/** 保存データまたは入力取得結果が有効なゲームパッド識別子かを確認する。 */
+function isGamepadBinding(value: unknown): value is GamepadBinding {
+  if (typeof value !== "string") return false;
+  if (/^button:\d+$/.test(value)) return true;
+  return /^axis:\d+:(-1|1)$/.test(value);
+}
+
+/** 指定したゲームパッド識別子が固定キャンセル用の Home ボタンかを確認する。 */
+function isFixedCancelGamepadBinding(binding: GamepadBinding): boolean {
+  return binding === `button:${FIXED_CANCEL_GAMEPAD_BUTTON_INDEX}`;
 }
 
 /**
@@ -180,6 +253,57 @@ function loadKeyboardBindings(): KeyboardBindings {
   }
 
   return cloneKeyboardBindings();
+}
+
+/** localStorage に保存されたゲームパッド設定を現在の形式へ検証・復元する。 */
+function migrateGamepadBindings(value: unknown): GamepadBindings | null {
+  if (!isRecord(value)) return null;
+
+  const bindings = cloneGamepadBindings();
+  for (const player of PLAYERS) {
+    const playerBindings = value[String(player)];
+    if (!isRecord(playerBindings)) return null;
+
+    const assignedBindings = new Set<GamepadBinding>();
+    for (const { action } of KEYBOARD_ACTIONS) {
+      const storedBindings = playerBindings[action];
+      if (!Array.isArray(storedBindings) || storedBindings.length === 0) {
+        return null;
+      }
+      const validBindings: GamepadBinding[] = [];
+      for (const binding of storedBindings) {
+        if (
+          !isGamepadBinding(binding) ||
+          isFixedCancelGamepadBinding(binding) ||
+          assignedBindings.has(binding)
+        ) {
+          return null;
+        }
+        validBindings.push(binding);
+        assignedBindings.add(binding);
+      }
+
+      bindings[player][action] = validBindings;
+    }
+  }
+
+  return bindings;
+}
+
+/** localStorage からゲームパッド設定を安全に読み込む。 */
+function loadGamepadBindings(): GamepadBindings {
+  try {
+    if (typeof window === "undefined") return cloneGamepadBindings();
+    const stored = window.localStorage.getItem(GAMEPAD_CONFIG_STORAGE_KEY);
+    if (!stored) return cloneGamepadBindings();
+
+    const migrated = migrateGamepadBindings(JSON.parse(stored) as unknown);
+    if (migrated) return migrated;
+  } catch {
+    // 保存値が壊れている場合は初期配置で安全に続行する。
+  }
+
+  return cloneGamepadBindings();
 }
 
 /** 操作ボタン名から定義を取り出す。 */
@@ -291,12 +415,163 @@ export class KeyboardConfig {
 /** アプリ全体で共有するキーコンフィグ。 */
 export const keyboardConfig = new KeyboardConfig();
 
+/** ゲームパッド割り当ての変更結果。 */
+export type GamepadBindingResult =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly reason: "reserved" | "duplicate";
+      readonly conflictingTarget?: KeyBindingTarget;
+    };
+
+/**
+ * Xbox コントローラーの入力配置を管理する。
+ * ゲームパッドは P1・P2 で別々の端末を使うため、重複確認は同一プレイヤー内だけで行う。
+ */
+export class GamepadConfig {
+  /** 現在有効なゲームパッド割り当て。 */
+  private bindings = loadGamepadBindings();
+
+  /** 指定した操作に割り当てられた全ゲームパッド入力を返す。 */
+  public getBindings(
+    player: PlayerId,
+    action: KeyboardAction,
+  ): readonly GamepadBinding[] {
+    return this.bindings[player][action];
+  }
+
+  /** 同一プレイヤーで指定のゲームパッド入力を使う操作を検索する。 */
+  public findBinding(
+    player: PlayerId,
+    binding: GamepadBinding,
+  ): KeyBindingTarget | null {
+    for (const { action } of KEYBOARD_ACTIONS) {
+      if (this.bindings[player][action].includes(binding)) {
+        return { player, action };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 操作へゲームパッド入力を割り当てる。
+   * 変更後は選択した一つの入力だけを使い、初期状態では十字キーとスティックの両方を使える。
+   */
+  public assign(
+    target: KeyBindingTarget,
+    binding: GamepadBinding,
+  ): GamepadBindingResult {
+    if (isFixedCancelGamepadBinding(binding)) {
+      return { ok: false, reason: "reserved" };
+    }
+
+    const existing = this.findBinding(target.player, binding);
+    if (existing && existing.action !== target.action) {
+      return { ok: false, reason: "duplicate", conflictingTarget: existing };
+    }
+
+    this.bindings[target.player][target.action] = [binding];
+    this.save();
+    return { ok: true };
+  }
+
+  /** すべてのゲームパッド配置を初期状態へ戻す。 */
+  public reset(): void {
+    this.bindings = cloneGamepadBindings();
+    this.save();
+  }
+
+  /** 指定のゲームパッド状態から、操作に対応するボタンビットを生成する。 */
+  public sample(player: PlayerId, gamepad: Gamepad): number {
+    let buttons = 0;
+    for (const { action, button } of KEYBOARD_ACTIONS) {
+      if (
+        this.bindings[player][action].some((binding) =>
+          gamepadBindingDown(gamepad, binding),
+        )
+      ) {
+        buttons |= button;
+      }
+    }
+    return buttons;
+  }
+
+  /** ゲームパッド配置をブラウザーへ保存する。 */
+  private save(): void {
+    try {
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(
+          GAMEPAD_CONFIG_STORAGE_KEY,
+          JSON.stringify(this.bindings),
+        );
+      }
+    } catch {
+      // 保存に失敗しても、現在の対戦中は変更後の配置を使い続ける。
+    }
+  }
+}
+
+/** アプリ全体で共有する Xbox コントローラー設定。 */
+export const gamepadConfig = new GamepadConfig();
+
+/** 操作一覧に表示するゲームパッド入力名を日本語へ変換する。 */
+export function formatGamepadBinding(binding: GamepadBinding): string {
+  const buttonMatch = /^button:(\d+)$/.exec(binding);
+  if (buttonMatch) {
+    const buttonIndex = Number(buttonMatch[1]);
+    const buttonNames: Record<number, string> = {
+      0: "A",
+      1: "B",
+      2: "X",
+      3: "Y",
+      4: "LB",
+      5: "RB",
+      6: "LT",
+      7: "RT",
+      8: "VIEW",
+      9: "MENU",
+      10: "左スティック押込",
+      11: "右スティック押込",
+      12: "Dパッド ↑",
+      13: "Dパッド ↓",
+      14: "Dパッド ←",
+      15: "Dパッド →",
+      [FIXED_CANCEL_GAMEPAD_BUTTON_INDEX]: "HOME",
+    };
+    return buttonNames[buttonIndex] ?? `BUTTON ${buttonIndex}`;
+  }
+
+  const axisMatch = /^axis:(\d+):(-1|1)$/.exec(binding);
+  if (!axisMatch) return binding;
+
+  const axisIndex = Number(axisMatch[1]);
+  const direction = Number(axisMatch[2]);
+  if (axisIndex === 0) return `左スティック ${direction < 0 ? "←" : "→"}`;
+  if (axisIndex === 1) return `左スティック ${direction < 0 ? "↑" : "↓"}`;
+  return `AXIS ${axisIndex} ${direction < 0 ? "−" : "+"}`;
+}
+
 /** Xboxのボタン状態を押下・アナログ入力の両方から判定する。 */
 function buttonDown(gamepad: Gamepad, index: number): boolean {
   return Boolean(
     gamepad.buttons[index]?.pressed ||
     (gamepad.buttons[index]?.value ?? 0) > 0.5,
   );
+}
+
+/** 保存済みゲームパッド入力が現在押されているかを判定する。 */
+function gamepadBindingDown(
+  gamepad: Gamepad,
+  binding: GamepadBinding,
+): boolean {
+  const buttonMatch = /^button:(\d+)$/.exec(binding);
+  if (buttonMatch) return buttonDown(gamepad, Number(buttonMatch[1]));
+
+  const axisMatch = /^axis:(\d+):(-1|1)$/.exec(binding);
+  if (!axisMatch) return false;
+  const value = gamepad.axes[Number(axisMatch[1])] ?? 0;
+  const direction = Number(axisMatch[2]);
+  return direction < 0 ? value < -0.45 : value > 0.45;
 }
 
 /**
@@ -307,6 +582,15 @@ function buttonDown(gamepad: Gamepad, index: number): boolean {
 export class InputManager {
   /** 現在押されているキーボードキー。 */
   private readonly heldKeys = new Set<string>();
+
+  /** キーコンフィグでゲームパッド入力を待機しているプレイヤー。 */
+  private gamepadCapturePlayer: PlayerId | null = null;
+
+  /** 割り当て待機を始めた時点から押し続けられているゲームパッド入力。 */
+  private gamepadCaptureHeld = new Set<GamepadBinding>();
+
+  /** Home ボタンの前フレームの押下状態。押しっぱなしで連続キャンセルしないために使う。 */
+  private gamepadHomeHeld = new Set<number>();
 
   public constructor() {
     //====================================================
@@ -330,8 +614,8 @@ export class InputManager {
       }
     }
 
-    const gamepad = navigator.getGamepads()[player];
-    if (gamepad?.connected) buttons |= this.sampleXboxGamepad(gamepad);
+    const gamepad = this.gamepadForPlayer(player);
+    if (gamepad?.connected) buttons |= this.sampleXboxGamepad(player, gamepad);
 
     return { buttons };
   }
@@ -341,6 +625,57 @@ export class InputManager {
     window.removeEventListener("keydown", this.onKeyDown);
     window.removeEventListener("keyup", this.onKeyUp);
     window.removeEventListener("blur", this.clear);
+    this.gamepadCapturePlayer = null;
+    this.gamepadCaptureHeld.clear();
+    this.gamepadHomeHeld.clear();
+  }
+
+  /** 指定プレイヤーのゲームパッド入力を次回のキーコンフィグ変更として受け付ける。 */
+  public beginGamepadBindingCapture(player: PlayerId): void {
+    this.gamepadCapturePlayer = player;
+    this.gamepadCaptureHeld = new Set(this.pressedGamepadBindings(player, 0.7));
+  }
+
+  /** ゲームパッド入力の割り当て待機を終了する。 */
+  public endGamepadBindingCapture(): void {
+    this.gamepadCapturePlayer = null;
+    this.gamepadCaptureHeld.clear();
+  }
+
+  /**
+   * 割り当て待機中に新しく押されたゲームパッド入力を一つ取得する。
+   * Home は Esc と同じ固定操作なので、ここでは割り当て対象にしない。
+   */
+  public consumeGamepadBindingCapture(): GamepadBinding | null {
+    const player = this.gamepadCapturePlayer;
+    if (player === null) return null;
+
+    const pressedBindings = this.pressedGamepadBindings(player, 0.7);
+    const nextBinding = pressedBindings.find(
+      (binding) =>
+        !this.gamepadCaptureHeld.has(binding) &&
+        !isFixedCancelGamepadBinding(binding),
+    );
+    this.gamepadCaptureHeld = new Set(pressedBindings);
+    return nextBinding ?? null;
+  }
+
+  /**
+   * 接続済みコントローラーの Home ボタンを立ち上がり時だけ返す。
+   * ブラウザー・OS の仕様で Guide が公開されない機種では、通常どおり Esc を使える。
+   */
+  public consumeGamepadHomePress(): boolean {
+    const activeHomeButtons = new Set<number>();
+    let pressedThisFrame = false;
+
+    for (const gamepad of this.connectedGamepads()) {
+      if (!buttonDown(gamepad, FIXED_CANCEL_GAMEPAD_BUTTON_INDEX)) continue;
+      activeHomeButtons.add(gamepad.index);
+      if (!this.gamepadHomeHeld.has(gamepad.index)) pressedThisFrame = true;
+    }
+
+    this.gamepadHomeHeld = activeHomeButtons;
+    return pressedThisFrame;
   }
 
   /** ゲーム操作キーを記録し、ブラウザ標準操作を抑止する。 */
@@ -376,33 +711,45 @@ export class InputManager {
     );
   }
 
+  /** 指定プレイヤーに紐付くゲームパッドを安全に取得する。 */
+  private gamepadForPlayer(player: PlayerId): Gamepad | null {
+    if (typeof navigator === "undefined" || !navigator.getGamepads) {
+      return null;
+    }
+    return navigator.getGamepads()[player] ?? null;
+  }
+
+  /** 接続済みゲームパッドを Home の固定操作確認用に列挙する。 */
+  private connectedGamepads(): Gamepad[] {
+    if (typeof navigator === "undefined" || !navigator.getGamepads) return [];
+    return Array.from(navigator.getGamepads()).filter(
+      (gamepad): gamepad is Gamepad => gamepad?.connected === true,
+    );
+  }
+
+  /** 指定プレイヤーのゲームパッドから、しきい値を超えた全入力を取り出す。 */
+  private pressedGamepadBindings(
+    player: PlayerId,
+    axisThreshold: number,
+  ): GamepadBinding[] {
+    const gamepad = this.gamepadForPlayer(player);
+    if (!gamepad?.connected) return [];
+
+    const bindings: GamepadBinding[] = [];
+    gamepad.buttons.forEach((button, index) => {
+      if (button.pressed || button.value > 0.7) {
+        bindings.push(`button:${index}`);
+      }
+    });
+    gamepad.axes.forEach((axis, index) => {
+      if (axis < -axisThreshold) bindings.push(`axis:${index}:-1`);
+      if (axis > axisThreshold) bindings.push(`axis:${index}:1`);
+    });
+    return bindings;
+  }
+
   /** Xboxゲームパッドをゲーム内ボタンへ変換する。 */
-  private sampleXboxGamepad(gamepad: Gamepad): number {
-    let buttons = 0;
-
-    // アナログスティック
-    const horizontal = gamepad.axes[0] ?? 0;
-    const vertical = gamepad.axes[1] ?? 0;
-
-    if (horizontal < -0.45 || buttonDown(gamepad, 14)) {
-      buttons |= InputButton.Left;
-    }
-    if (horizontal > 0.45 || buttonDown(gamepad, 15)) {
-      buttons |= InputButton.Right;
-    }
-    if (vertical < -0.45 || buttonDown(gamepad, 12)) {
-      buttons |= InputButton.Up;
-    }
-    if (vertical > 0.45 || buttonDown(gamepad, 13)) {
-      buttons |= InputButton.Down;
-    }
-
-    if (buttonDown(gamepad, 0)) buttons |= InputButton.Light;
-    if (buttonDown(gamepad, 2)) buttons |= InputButton.Heavy;
-    if (buttonDown(gamepad, 1)) buttons |= InputButton.Special;
-    // Xbox標準ゲームパッドのRT（右トリガー）はボタン番号7として取得する。
-    if (buttonDown(gamepad, 7)) buttons |= InputButton.Throw;
-
-    return buttons;
+  private sampleXboxGamepad(player: PlayerId, gamepad: Gamepad): number {
+    return gamepadConfig.sample(player, gamepad);
   }
 }

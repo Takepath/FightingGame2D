@@ -6,7 +6,9 @@ import { FrameSynchronizer } from "./frameSynchronizer";
 import { FighterView } from "./fighterView";
 import {
   FIXED_CANCEL_KEY_CODE,
+  formatGamepadBinding,
   formatKeyboardCode,
+  gamepadConfig,
   getKeyboardActionDefinition,
   InputManager,
   keyboardConfig,
@@ -18,8 +20,10 @@ import { FIGHTING_GAME_CONFIG } from "./gameConfig";
 import {
   FRAMES_PER_SECOND,
   GROUND_Y,
+  HIT_STOP_FRAMES,
   MAX_ROUNDS,
   MAX_SPECIAL_GAUGE,
+  MAX_SUPER_GAUGE,
   MatchSimulation,
   STAGE_HEIGHT,
   STAGE_WIDTH,
@@ -49,6 +53,10 @@ const MAX_STEPS_PER_RENDER = 5;
 const MAX_TRAINING_INPUT_HISTORY = 8;
 
 /** 試合勝者の決定時に打ち上げる花火の本数。 */
+/** 超必殺ゲージは100単位のバーと、右側の百の位で表示する。 */
+const SUPER_GAUGE_BAR_MAX = 100;
+const SUPER_GAUGE_BAR_WIDTH = 190;
+
 const MATCH_RESULT_FIREWORKS = 3;
 
 /** 写真のような多色の大輪に見せるため、各打上げへ重ねる色の層。 */
@@ -57,6 +65,9 @@ const MATCH_RESULT_FIREWORK_HUES = [
   { min: 270, max: 300 },
   { min: 25, max: 48 },
 ] as const;
+
+/** public配下に配置する、強い攻撃命中時の効果音ファイル。 */
+const HIT_STOP_SOUND_PATH = "data/sounds/slap-1.mp3";
 
 /**
  * 対戦画面クラス
@@ -177,6 +188,12 @@ export class MatchScreen extends Container {
     "training-auto-recovery",
   )! as HTMLSelectElement;
 
+  /** トレーニング中、P1の必殺技ゲージを技使用直後に回復する設定の選択欄。 */
+  private readonly trainingAutoSpecialGaugeRecoverySelect =
+    document.getElementById(
+      "training-auto-special-gauge-recovery",
+    )! as HTMLSelectElement;
+
   /** トレーニング中のP1入力履歴を表示するかを切り替える選択欄。 */
   private readonly trainingInputHistorySelect = document.getElementById(
     "training-input-history",
@@ -228,6 +245,9 @@ export class MatchScreen extends Container {
   /** 被撃側の連続ヒット数を表示するCOMBOテキスト。 */
   private readonly comboText: Text;
 
+  /** 超必殺ゲージの百の位を、各プレイヤーのバー右側へ表示するテキスト。 */
+  private readonly superGaugeDigits: [Text, Text];
+
   /** トレーニング中のP1入力履歴を縦並びで描画するText。 */
   private readonly trainingInputHistoryText: Text;
 
@@ -248,6 +268,15 @@ export class MatchScreen extends Container {
 
   /** 前回HUDへ描画した必殺技ゲージ。変化時だけGraphicsを描き直す。 */
   private readonly displayedSpecialGauge: [number, number] = [-1, -1];
+
+  /** 前回HUDへ描画した超必殺ゲージ。変化時だけGraphicsと百の位を更新する。 */
+  private readonly displayedSuperGauge: [number, number] = [-1, -1];
+
+  /** 強い攻撃の命中時に再生する、ユーザー提供の打撃音。 */
+  private readonly hitStopSound = new Audio();
+
+  /** 前回描画時のヒットストップ残りフレーム。音の重複再生を防ぐ。 */
+  private previousHitStopFrames = 0;
 
   /** 前フレームに飛び道具Graphicsが存在したか。 */
   private hadProjectiles = false;
@@ -313,6 +342,9 @@ export class MatchScreen extends Container {
 
     this.training = MatchScreen.training;
     this.cpuLevel = MatchScreen.cpuLevel;
+    // 公開URLを使って、Viteのbase URL配下でも効果音を正しく取得する。
+    this.hitStopSound.src = this.gameAssetUrl(HIT_STOP_SOUND_PATH);
+    this.hitStopSound.preload = "auto";
     // トレーニングでは試合勝敗がないため、花火インスタンスを生成しない。
     this.matchResultFireworks = this.training
       ? []
@@ -374,6 +406,10 @@ export class MatchScreen extends Container {
     this.koText = this.createText("", 64, "#fff1a3");
     this.comboText = this.createText("", 32, "#ffe58a");
     this.comboText.visible = false;
+    this.superGaugeDigits = [
+      this.createText("0", 24, "#ff6b78"),
+      this.createText("0", 24, "#ff6b78"),
+    ];
     this.trainingInputHistoryText = new Text({
       text: "",
       style: {
@@ -391,6 +427,12 @@ export class MatchScreen extends Container {
     this.title.position.set(STAGE_WIDTH / 2, 55);
     this.info.position.set(STAGE_WIDTH / 2, 677);
     this.koText.position.set(STAGE_WIDTH / 2, 265);
+    // 画面下部の操作説明の左右に、赤系統で統一した超必殺ゲージの百の位を置く。
+    this.superGaugeDigits[0].position.set(36 + SUPER_GAUGE_BAR_WIDTH + 18, 649);
+    this.superGaugeDigits[1].position.set(
+      STAGE_WIDTH - 36 - SUPER_GAUGE_BAR_WIDTH + SUPER_GAUGE_BAR_WIDTH + 18,
+      649,
+    );
     this.trainingInputHistoryText.position.set(34, 128);
     this.trainingInputHistoryText.visible = false;
 
@@ -412,6 +454,8 @@ export class MatchScreen extends Container {
       this.roundText,
       this.koText,
       this.comboText,
+      this.superGaugeDigits[0],
+      this.superGaugeDigits[1],
       this.trainingInputHistoryText,
     );
 
@@ -451,6 +495,10 @@ export class MatchScreen extends Container {
       "change",
       this.updateTrainingCpuSettings,
     );
+    this.trainingAutoSpecialGaugeRecoverySelect.addEventListener(
+      "change",
+      this.updateTrainingCpuSettings,
+    );
     this.trainingInputHistorySelect.addEventListener(
       "change",
       this.updateTrainingCpuSettings,
@@ -477,6 +525,7 @@ export class MatchScreen extends Container {
 
     this.synchronizer.reset();
     this.simulation.resetMatch();
+    this.previousHitStopFrames = 0;
     this.accumulatorMs = 0;
   }
 
@@ -491,6 +540,7 @@ export class MatchScreen extends Container {
 
     this.synchronizer.reset();
     this.simulation.resetMatch();
+    this.previousHitStopFrames = 0;
     this.accumulatorMs = 0;
   }
 
@@ -499,6 +549,9 @@ export class MatchScreen extends Container {
    * 描画フレームとは独立して60FPSシミュレーションを実行
    */
   public update(time: Ticker): void {
+    // Home は Esc と同じ固定キャンセル。停止中も監視して再開操作を受け付ける。
+    if (this.input.consumeGamepadHomePress()) this.handleCancelInput();
+    this.captureGamepadBinding();
     if (this.paused) return;
 
     this.accumulatorMs += Math.min(time.deltaMS, 250);
@@ -593,6 +646,10 @@ export class MatchScreen extends Container {
     this.matchResultFireworks.forEach((fireworksAtPoint) => {
       fireworksAtPoint.forEach((fireworks) => fireworks.stop(true));
     });
+    // 画面遷移後に効果音だけが残らないよう停止し、ブラウザー側の音声リソースを解放する。
+    this.hitStopSound.pause();
+    this.hitStopSound.removeAttribute("src");
+    this.hitStopSound.load();
     window.removeEventListener("keydown", this.onKeyDown);
     this.resumeButton.removeEventListener("click", this.resumeMatch);
     this.optionsButton.removeEventListener("click", this.showOptions);
@@ -618,6 +675,10 @@ export class MatchScreen extends Container {
       "change",
       this.updateTrainingCpuSettings,
     );
+    this.trainingAutoSpecialGaugeRecoverySelect.removeEventListener(
+      "change",
+      this.updateTrainingCpuSettings,
+    );
     this.trainingInputHistorySelect.removeEventListener(
       "change",
       this.updateTrainingCpuSettings,
@@ -636,6 +697,16 @@ export class MatchScreen extends Container {
   private onKeyDown = (event: KeyboardEvent): void => {
     if (event.code !== FIXED_CANCEL_KEY_CODE || event.repeat) return;
     event.preventDefault();
+    this.handleCancelInput();
+  };
+
+  /** Esc と Xbox Home に共通するキャンセル・一時停止の遷移を処理する。 */
+  private handleCancelInput(): void {
+    if (this.keyBindingTarget) {
+      this.stopKeyBinding();
+      this.keyConfigStatus.textContent = "入力の変更を取り消しました。";
+      return;
+    }
     if (!this.isPauseMenuOpen()) {
       this.openPauseMenu();
     } else if (this.isOptionsOpen()) {
@@ -643,7 +714,7 @@ export class MatchScreen extends Container {
     } else {
       this.resumeMatch();
     }
-  };
+  }
 
   /** 試合を停止して通常メニューを画面中央へ表示する。 */
   private openPauseMenu = (): void => {
@@ -729,7 +800,44 @@ export class MatchScreen extends Container {
         bindings.append(row);
       }
 
-      group.append(bindings);
+      // Xbox はキーボードと別の保存設定を表示し、同じ待機操作で再割り当てする。
+      const gamepadSection = document.createElement("div");
+      gamepadSection.className = "key-config-gamepad";
+
+      const gamepadHeading = document.createElement("h3");
+      gamepadHeading.textContent = "XBOX CONTROLLER";
+      gamepadSection.append(gamepadHeading);
+
+      const gamepadBindings = document.createElement("div");
+      gamepadBindings.className = "key-config-bindings";
+      for (const { action, label } of KEYBOARD_ACTIONS) {
+        const row = document.createElement("div");
+        row.className = "key-config-row";
+
+        const actionLabel = document.createElement("span");
+        actionLabel.textContent = label;
+
+        const gamepadButton = document.createElement("button");
+        gamepadButton.type = "button";
+        gamepadButton.className = "key-config-binding";
+        gamepadButton.textContent = gamepadConfig
+          .getBindings(player, action)
+          .map(formatGamepadBinding)
+          .join(" / ");
+        gamepadButton.setAttribute(
+          "aria-label",
+          `PLAYER ${player + 1}の${label}: ${gamepadButton.textContent}`,
+        );
+        gamepadButton.addEventListener("click", () =>
+          this.startKeyBinding({ player, action }, gamepadButton),
+        );
+
+        row.append(actionLabel, gamepadButton);
+        gamepadBindings.append(row);
+      }
+
+      gamepadSection.append(gamepadBindings);
+      group.append(bindings, gamepadSection);
       this.keyConfigList.append(group);
     }
   }
@@ -742,9 +850,10 @@ export class MatchScreen extends Container {
     this.stopKeyBinding();
     this.keyBindingTarget = { ...target, button };
     button.classList.add("is-waiting-for-key");
+    this.input.beginGamepadBindingCapture(target.player);
 
     const definition = getKeyboardActionDefinition(target.action);
-    this.keyConfigStatus.textContent = `P${target.player + 1}の「${definition.label}」に割り当てるキーを押してください。Escでキャンセルします。`;
+    this.keyConfigStatus.textContent = `P${target.player + 1}の「${definition.label}」に割り当てるキーまたは Xbox コントローラーの入力を押してください。Esc または Home でキャンセルします。`;
     window.addEventListener("keydown", this.captureKeyBinding, true);
     button.focus();
   }
@@ -785,12 +894,43 @@ export class MatchScreen extends Container {
       "Escと修飾キーは割り当てできません。別のキーを押してください。";
   };
 
+  /** キーコンフィグ待機中の Xbox コントローラー入力を処理する。 */
+  private captureGamepadBinding(): void {
+    const target = this.keyBindingTarget;
+    if (!target) return;
+
+    const binding = this.input.consumeGamepadBindingCapture();
+    if (!binding) return;
+
+    const result = gamepadConfig.assign(target, binding);
+    if (result.ok) {
+      const definition = getKeyboardActionDefinition(target.action);
+      const bindingName = formatGamepadBinding(binding);
+      this.stopKeyBinding();
+      this.renderKeyConfig();
+      this.keyConfigStatus.textContent = `P${target.player + 1}の「${definition.label}」を ${bindingName} に設定しました。`;
+      return;
+    }
+
+    if (result.reason === "duplicate" && result.conflictingTarget) {
+      const definition = getKeyboardActionDefinition(
+        result.conflictingTarget.action,
+      );
+      this.keyConfigStatus.textContent = `${formatGamepadBinding(binding)} は P${result.conflictingTarget.player + 1}の「${definition.label}」に設定済みです。別の入力を押してください。`;
+      return;
+    }
+
+    this.keyConfigStatus.textContent =
+      "Home は Esc と同じ固定キャンセル操作のため、割り当てできません。";
+  }
+
   /** キー入力待機を終了し、イベント監視と見た目を元に戻す。 */
   private stopKeyBinding(): void {
     if (this.keyBindingTarget) {
       this.keyBindingTarget.button.classList.remove("is-waiting-for-key");
     }
     this.keyBindingTarget = null;
+    this.input.endGamepadBindingCapture();
     window.removeEventListener("keydown", this.captureKeyBinding, true);
   }
 
@@ -798,8 +938,10 @@ export class MatchScreen extends Container {
   private resetKeyConfig = (): void => {
     this.stopKeyBinding();
     keyboardConfig.reset();
+    gamepadConfig.reset();
     this.renderKeyConfig();
-    this.keyConfigStatus.textContent = "キー配置を初期設定に戻しました。";
+    this.keyConfigStatus.textContent =
+      "キーボードと Xbox コントローラーの配置を初期設定に戻しました。";
     this.keyConfigResetButton.focus();
   };
 
@@ -815,6 +957,9 @@ export class MatchScreen extends Container {
     });
     this.simulation.setTrainingAutoRecovery(
       this.trainingAutoRecoverySelect.value === "on",
+    );
+    this.simulation.setTrainingAutoSpecialGaugeRecovery(
+      this.trainingAutoSpecialGaugeRecoverySelect.value === "on",
     );
     this.setTrainingInputHistoryEnabled(
       this.trainingInputHistorySelect.value === "on",
@@ -1027,7 +1172,9 @@ export class MatchScreen extends Container {
       left.health === this.displayedHealth[0] &&
       right.health === this.displayedHealth[1] &&
       left.specialGauge === this.displayedSpecialGauge[0] &&
-      right.specialGauge === this.displayedSpecialGauge[1]
+      right.specialGauge === this.displayedSpecialGauge[1] &&
+      left.superGauge === this.displayedSuperGauge[0] &&
+      right.superGauge === this.displayedSuperGauge[1]
     ) {
       return;
     }
@@ -1036,6 +1183,8 @@ export class MatchScreen extends Container {
     this.displayedHealth[1] = right.health;
     this.displayedSpecialGauge[0] = left.specialGauge;
     this.displayedSpecialGauge[1] = right.specialGauge;
+    this.displayedSuperGauge[0] = left.superGauge;
+    this.displayedSuperGauge[1] = right.superGauge;
     const art = this.hudArt;
     art.clear();
 
@@ -1060,6 +1209,21 @@ export class MatchScreen extends Container {
     // キャラクターカラーとは独立した固定色で、HPバー直下に必殺技ゲージを描画する。
     this.drawSpecialGauge(48, 74, 470, left.specialGauge, false);
     this.drawSpecialGauge(STAGE_WIDTH - 48, 74, 470, right.specialGauge, true);
+    this.drawSuperGauge(36, 632, SUPER_GAUGE_BAR_WIDTH, left.superGauge);
+    this.drawSuperGauge(
+      STAGE_WIDTH - 36 - SUPER_GAUGE_BAR_WIDTH,
+      632,
+      SUPER_GAUGE_BAR_WIDTH,
+      right.superGauge,
+    );
+    this.setTextIfChanged(
+      this.superGaugeDigits[0],
+      String(Math.floor(left.superGauge / SUPER_GAUGE_BAR_MAX)),
+    );
+    this.setTextIfChanged(
+      this.superGaugeDigits[1],
+      String(Math.floor(right.superGauge / SUPER_GAUGE_BAR_MAX)),
+    );
   }
 
   /**
@@ -1123,6 +1287,59 @@ export class MatchScreen extends Container {
   }
 
   /**
+   * 最大300の超必殺ゲージを、右肩上がりの100単位グラフとして描画する。
+   * 百の位はTextでバー右側へ表示し、バー自体は現在の100単位内の進捗を表す。
+   */
+  private drawSuperGauge(
+    x: number,
+    y: number,
+    width: number,
+    gauge: number,
+  ): void {
+    const innerX = x + 2;
+    const innerWidth = width - 4;
+    const height = 20;
+    // 300到達時だけは、最終ストックが満タンであることをバーでも示す。
+    const segmentGauge =
+      gauge >= MAX_SUPER_GAUGE
+        ? SUPER_GAUGE_BAR_MAX
+        : gauge % SUPER_GAUGE_BAR_MAX;
+    const fillWidth = Math.round(
+      (innerWidth * segmentGauge) / SUPER_GAUGE_BAR_MAX,
+    );
+    const topAt = (pointX: number) =>
+      y + 8 - ((pointX - innerX) * 8) / innerWidth;
+
+    // 外枠を右肩上がりの四角形にし、グラフの目盛りを重ねる。
+    this.hudArt
+      .moveTo(x, y + height)
+      .lineTo(x + width, y + height)
+      .lineTo(x + width, y)
+      .lineTo(x, y + 8)
+      .closePath()
+      .fill({ color: 0x19070b, alpha: 0.94 })
+      .stroke({ color: 0xff6573, width: 2, alpha: 0.95 });
+
+    for (const ratio of [0.25, 0.5, 0.75]) {
+      const gridX = innerX + innerWidth * ratio;
+      this.hudArt
+        .moveTo(gridX, y + height - 2)
+        .lineTo(gridX, topAt(gridX) + 2)
+        .stroke({ color: 0xff6573, width: 1, alpha: 0.28 });
+    }
+
+    if (fillWidth <= 0) return;
+    const fillEndX = innerX + fillWidth;
+    this.hudArt
+      .moveTo(innerX, y + height - 2)
+      .lineTo(fillEndX, y + height - 2)
+      .lineTo(fillEndX, topAt(fillEndX) + 2)
+      .lineTo(innerX, topAt(innerX) + 2)
+      .closePath()
+      .fill({ color: 0xe34452, alpha: 0.96 });
+  }
+
+  /**
    * 全表示更新
    * ・キャラクター
    * ・飛び道具
@@ -1137,6 +1354,7 @@ export class MatchScreen extends Container {
     this.drawTrainingCollisionDebug();
     this.drawProjectiles();
     this.drawHud();
+    this.playHitStopSound();
     this.updateComboText();
     this.playMatchResultFireworks();
     if (!this.training) {
@@ -1196,6 +1414,20 @@ export class MatchScreen extends Container {
     this.comboText.visible = true;
     this.comboText.position.set(attacker === 0 ? 490 : STAGE_WIDTH - 490, 92);
     this.setTextIfChanged(this.comboText, `${comboTarget.comboHitCount} HIT`);
+  }
+
+  /** ヒットストップ開始の瞬間だけ、打撃効果音を先頭から再生する。 */
+  private playHitStopSound(): void {
+    const hitStopFrames = this.simulation.hitStopFrames;
+    const started =
+      hitStopFrames === HIT_STOP_FRAMES &&
+      this.previousHitStopFrames !== HIT_STOP_FRAMES;
+    this.previousHitStopFrames = hitStopFrames;
+    if (!started) return;
+
+    this.hitStopSound.currentTime = 0;
+    // ブラウザーの自動再生制限で拒否された場合も、ゲーム進行を止めない。
+    void this.hitStopSound.play().catch(() => undefined);
   }
 
   /** 2本先取で試合勝者が決定した瞬間だけ、下から中央へ3発の花火を打ち上げる。 */
