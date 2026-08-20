@@ -215,6 +215,8 @@ function parseMoves(source: string): MoveDefinition[] {
     startup: Number(row.startup),
     active: Number(row.active),
     recovery: Number(row.recovery),
+    // 無敵フレームが未指定の旧CSVは0Fとして扱い、既存の技設定と互換にする。
+    invincibleFrames: row.invincible_frames ? Number(row.invincible_frames) : 0,
 
     // 攻撃性能
     // 割合へ換算せず、CSVに記述した実数HPポイントをそのまま使用する。
@@ -425,6 +427,17 @@ export async function loadGameData(
     }
   }
   for (const move of moves) {
+    if (
+      !Number.isInteger(move.invincibleFrames) ||
+      move.invincibleFrames < 0 ||
+      move.invincibleFrames > move.startup + move.active + move.recovery
+    ) {
+      throw new Error(
+        "moves.csv の " +
+          move.id +
+          " の invincible_frames は0以上、技の全体フレーム以下の整数を指定してください",
+      );
+    }
     if (!Number.isInteger(move.damage) || move.damage < 0) {
       throw new Error(
         `moves.csv の ${move.id} の damage は0以上の整数ダメージを指定してください`,

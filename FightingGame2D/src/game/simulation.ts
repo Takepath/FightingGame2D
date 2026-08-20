@@ -1288,10 +1288,17 @@ export class MatchSimulation implements DeterministicSimulation {
         this.distanceToHurtboxY(projectile.y, defender) <=
           PROJECTILE_HITBOX_RADIUS;
       if (collides) {
-        this.applyHit(attacker, defender, projectile, inputs[defender.player]);
-        this.projectiles.splice(index, 1);
-        // KOしたフレームは残る飛び道具も止め、1秒間の再開待機を正確に保つ。
-        if (this.training && this.trainingResetFrames > 0) return;
+        const connected = this.applyHit(
+          attacker,
+          defender,
+          projectile,
+          inputs[defender.player],
+        );
+        if (connected) {
+          this.projectiles.splice(index, 1);
+          // KOしたフレームは残る飛び道具も止め、1秒間の再開待機を正確に保つ。
+          if (this.training && this.trainingResetFrames > 0) return;
+        }
       } else if (
         projectile.life <= 0 ||
         projectile.x < LEFT_WALL ||
@@ -1320,6 +1327,11 @@ export class MatchSimulation implements DeterministicSimulation {
     deferKnockback = false,
   ): boolean {
     /** 近接技と飛び道具に共通する上中下ガード、ダメージ、KO処理を適用する。 */
+    if (this.isMoveInvincible(defender)) {
+      // 技開始からCSV指定フレーム中は、打撃・飛び道具・投げを問わず命中を無効化する。
+      // 飛び道具は消さずに通過させ、無敵終了後に残っていれば通常どおり命中判定する。
+      return false;
+    }
     const comboContinuation = this.isComboContinuation(attacker, defender);
     const guardStance = this.guardStanceFor(defender, attacker, defenderInput);
     // コンボ中とguard_bleak=trueの技・飛び道具は、入力中のガードを常に貫通する。
@@ -1417,6 +1429,16 @@ export class MatchSimulation implements DeterministicSimulation {
     }
     // ガードされた場合も攻撃が接触した事実を返し、攻撃側のキャンセルを許可する。
     return true;
+  }
+
+  /** 実行中の技が、moves.csvのinvincible_framesで指定した無敵時間中かを返す。 */
+  private isMoveInvincible(fighter: FighterState): boolean {
+    const move = this.moveFor(fighter, fighter.activeMoveId);
+    return (
+      move !== undefined &&
+      move.invincibleFrames > 0 &&
+      fighter.actionFrame < move.invincibleFrames
+    );
   }
 
   /** 被撃側が同じ攻撃者の被弾状態なら、次の命中を連続ヒットとして扱う。 */

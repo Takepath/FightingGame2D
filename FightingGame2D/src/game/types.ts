@@ -69,6 +69,8 @@ export interface MoveDefinition {
   startup: number;
   active: number;
   recovery: number;
+  /** 技開始からこのフレーム数の間、投げを含む全ての攻撃を受けない。 */
+  invincibleFrames: number;
   /** HPと同じ実数ポイントで扱うダメージ量。例: 500 は 500 HP のダメージ。 */
   damage: number;
   /** 最大100の必殺技ゲージから、技開始時に消費する量。0なら消費しない。 */

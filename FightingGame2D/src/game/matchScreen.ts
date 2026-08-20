@@ -428,9 +428,10 @@ export class MatchScreen extends Container {
     this.info.position.set(STAGE_WIDTH / 2, 677);
     this.koText.position.set(STAGE_WIDTH / 2, 265);
     // 画面下部の操作説明の左右に、赤系統で統一した超必殺ゲージの百の位を置く。
+    // P2はP1と鏡配置にし、数値をゲージの内側（画面中央側）へ寄せる。
     this.superGaugeDigits[0].position.set(36 + SUPER_GAUGE_BAR_WIDTH + 18, 649);
     this.superGaugeDigits[1].position.set(
-      STAGE_WIDTH - 36 - SUPER_GAUGE_BAR_WIDTH + SUPER_GAUGE_BAR_WIDTH + 18,
+      STAGE_WIDTH - 36 - SUPER_GAUGE_BAR_WIDTH - 18,
       649,
     );
     this.trainingInputHistoryText.position.set(34, 128);
@@ -1211,10 +1212,11 @@ export class MatchScreen extends Container {
     this.drawSpecialGauge(STAGE_WIDTH - 48, 74, 470, right.specialGauge, true);
     this.drawSuperGauge(36, 632, SUPER_GAUGE_BAR_WIDTH, left.superGauge);
     this.drawSuperGauge(
-      STAGE_WIDTH - 36 - SUPER_GAUGE_BAR_WIDTH,
+      STAGE_WIDTH - 36,
       632,
       SUPER_GAUGE_BAR_WIDTH,
       right.superGauge,
+      true,
     );
     this.setTextIfChanged(
       this.superGaugeDigits[0],
@@ -1288,15 +1290,18 @@ export class MatchScreen extends Container {
 
   /**
    * 最大300の超必殺ゲージを、右肩上がりの100単位グラフとして描画する。
-   * 百の位はTextでバー右側へ表示し、バー自体は現在の100単位内の進捗を表す。
+   * P2側は図形・蓄積方向とも反転し、P1側と鏡配置にする。
+   * 百の位はTextでバーの画面中央側へ表示し、バー自体は現在の100単位内の進捗を表す。
    */
   private drawSuperGauge(
     x: number,
     y: number,
     width: number,
     gauge: number,
+    reverse = false,
   ): void {
-    const innerX = x + 2;
+    const barX = reverse ? x - width : x;
+    const innerX = barX + 2;
     const innerWidth = width - 4;
     const height = 20;
     // 300到達時だけは、最終ストックが満タンであることをバーでも示す。
@@ -1307,15 +1312,17 @@ export class MatchScreen extends Container {
     const fillWidth = Math.round(
       (innerWidth * segmentGauge) / SUPER_GAUGE_BAR_MAX,
     );
-    const topAt = (pointX: number) =>
-      y + 8 - ((pointX - innerX) * 8) / innerWidth;
+    const topAt = (pointX: number) => {
+      const ratio = (pointX - innerX) / innerWidth;
+      return reverse ? y + ratio * 8 : y + 8 - ratio * 8;
+    };
 
-    // 外枠を右肩上がりの四角形にし、グラフの目盛りを重ねる。
+    // 外枠を右肩上がりの四角形にし、P2では水平方向に反転してグラフの目盛りを重ねる。
     this.hudArt
-      .moveTo(x, y + height)
-      .lineTo(x + width, y + height)
-      .lineTo(x + width, y)
-      .lineTo(x, y + 8)
+      .moveTo(barX, y + height)
+      .lineTo(barX + width, y + height)
+      .lineTo(barX + width, topAt(barX + width))
+      .lineTo(barX, topAt(barX))
       .closePath()
       .fill({ color: 0x19070b, alpha: 0.94 })
       .stroke({ color: 0xff6573, width: 2, alpha: 0.95 });
@@ -1329,12 +1336,13 @@ export class MatchScreen extends Container {
     }
 
     if (fillWidth <= 0) return;
-    const fillEndX = innerX + fillWidth;
+    const fillStartX = reverse ? innerX + innerWidth - fillWidth : innerX;
+    const fillEndX = reverse ? innerX + innerWidth : innerX + fillWidth;
     this.hudArt
-      .moveTo(innerX, y + height - 2)
+      .moveTo(fillStartX, y + height - 2)
       .lineTo(fillEndX, y + height - 2)
       .lineTo(fillEndX, topAt(fillEndX) + 2)
-      .lineTo(innerX, topAt(innerX) + 2)
+      .lineTo(fillStartX, topAt(fillStartX) + 2)
       .closePath()
       .fill({ color: 0xe34452, alpha: 0.96 });
   }

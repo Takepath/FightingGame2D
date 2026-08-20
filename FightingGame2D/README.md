@@ -100,6 +100,10 @@ Top画面で「ローカル対戦」を選ぶと、キャラクター選択画�
 
 `moves.csv` の `range_y` と `knockback_x` の間にある `self_move_x` / `self_move_y` は、技を開始したキャラクター自身へ与える移動速度です。単位はピクセル/秒で、`self_move_x` の正値は前方、`self_move_y` の正値は上方向です。昇竜拳のような前進・上昇技には両方を設定します。`0` の場合は追加移動しません。
 
+## 無敵フレームCSV
+
+moves.csv の recovery の直後にある invincible_frames は、技を開始してから全攻撃（打撃・飛び道具・投げ）を受けないフレーム数です。0で無敵なしとなり、技の全体フレーム（startup + active + recovery）を超える値は設定できません。標準の昇竜拳には、上昇中をカバーする18Fを設定しています。
+
 ## コマンド技CSV
 
 方向コマンドは [commands.csv](public/data/commands.csv) に定義し、[moves.csv](public/data/moves.csv) の `command_id` で参照します。`command_id` が空の技は、従来どおりボタンだけで発動します。複数の入力方式を許可する場合は `hadoken|hadoken_simple` のように `|` 区切りで複数IDを指定し、いずれかのコマンド成立で同じ技を発動できます。

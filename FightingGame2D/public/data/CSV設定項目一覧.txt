@@ -66,7 +66,7 @@ priority             同時成立時の優先度です。0～100の整数です�
 -------------
 
 通常技、必殺技、投げ、飛び道具を定義します。1行が1つの技です。
-startup、active、recovery、hitstun、projectile_lifetime は60 FPS基準のフレーム数です。
+startup、active、recovery、invincible_frames、hitstun、projectile_lifetime は60 FPS基準のフレーム数です。
 
 列名                 内容
 character_id         技を使用できるキャラクターのIDです。characters.csv の id を指定します。all を指定すると共通技になります。
@@ -75,6 +75,7 @@ button               発動ボタンです。light（弱）、heavy（強）、s
 startup              攻撃ボタンを押してから攻撃判定が出るまでのフレーム数です。
 active               攻撃判定が有効なフレーム数です。このフレーム数を超えて攻撃は当たりません。
 recovery             攻撃判定終了後の硬直フレーム数です。
+invincible_frames    技の開始から無敵になるフレーム数です。0以上、startup+active+recovery以下の整数を指定します。無敵中は打撃・飛び道具・投げを受けません。
 damage               与えるダメージの実数値です。例: 500 は500ダメージです。0以上の整数を指定します。
 special_gauge_cost   必殺技ゲージの消費量です。0～100で指定します。発動時に不足している技は出せません。
 super_gauge_gain     超必殺ゲージの増加量です。0～300で指定します。技を出した時に加算され、最大値は300です。
@@ -98,8 +99,8 @@ command_id           必殺技コマンドです。commands.csv の command_id �
 cancel_into          この技からキャンセルして出せる攻撃種別です。light、heavy、special、throw を | 区切りで指定します。空欄はキャンセル不可です。
 
 記入例（波動拳）
-character_id,move_id,button,startup,active,recovery,damage,special_gauge_cost,super_gauge_gain,guard_bleak,starter_proration,range_x,range_y,self_move_x,self_move_y,knockback_x,knockback_y,hitstun,animation,attack_type,projectile_speed,projectile_lifetime,use_state,attack_level,projectile_id,command_id,cancel_into
-sample,hadoken,special,13,7,25,500,10,15,false,0,0,0,0,0,300,0,15,special,projectile,720,110,ground,mid,hadoken_blue,hadoken,
+character_id,move_id,button,startup,active,recovery,invincible_frames,damage,special_gauge_cost,super_gauge_gain,guard_bleak,starter_proration,range_x,range_y,self_move_x,self_move_y,knockback_x,knockback_y,hitstun,animation,attack_type,projectile_speed,projectile_lifetime,use_state,attack_level,projectile_id,command_id,cancel_into
+sample,hadoken,special,13,7,25,0,500,10,15,false,0,0,0,0,0,300,0,15,special,projectile,720,110,ground,mid,hadoken_blue,hadoken,
 
 設定上の注意
 - command_id を持つ必殺技も、cancel_into に special が含まれる技からはコマンド入力なしでキャンセルできます。
