@@ -1,6 +1,8 @@
-command_id,sequence,max_frames,priority
-hadoken,2>3>6,27,10
-sinku,2>3>6>2>3>6,54,40
-tatumaki,2>1>4,27,20
-syouryu,6>2>3,27,30
-kanihado,2>6,18,5
+command_id,sequence,max_frames,priority,charge_frames
+hadoken,2>3>6,27,10,0
+sinku,2>3>6>2>3>6,54,40,0
+tatumaki,2>1>4,27,20,0
+syouryu,6>2>3,27,30,0
+kanihado,2>6,18,5,0
+da,6,9,5,0
+charge,4>6,60,35,40

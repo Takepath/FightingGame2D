@@ -6,6 +6,9 @@ import {
 import { COLOR_VARIANTS } from "./colors";
 import type { ColorVariant, FrameInput, PlayerId } from "./types";
 
+/** 試合終了後に両プレイヤーで同期する画面遷移操作。 */
+export type MatchResultAction = "rematch" | "character-select" | "top";
+
 /** 格闘ゲーム用クライアントの接続先設定。 */
 export interface RoomClientOptions {
   /** 合言葉ルームサーバーのWebSocket URL。省略時は既定の8787番ポートを使う。 */
@@ -17,9 +20,20 @@ type StatusHandler = (message: string) => void;
 /** 2人が揃った時のコールバック型。 */
 type ReadyHandler = (client: RoomClient) => void;
 /** フレーム入力受信用コールバック型。 */
-type InputHandler = (frame: number, buttons: number) => void;
+type InputHandler = (
+  frame: number,
+  buttons: number,
+  matchEpoch: number,
+) => void;
 /** キャラクター・カラー選択受信用コールバック型。 */
 type SelectionHandler = (characterId: string, color: ColorVariant) => void;
+/** 試合終了後の画面遷移操作受信用コールバック型。 */
+type MatchResultActionHandler = (
+  action: MatchResultAction,
+  matchEpoch: number,
+) => void;
+/** P1が再試合を開始してよいと確定した時の通知コールバック型。 */
+type RematchStartHandler = (matchEpoch: number) => void;
 /** 引数なし通知用コールバック型。 */
 type VoidHandler = () => void;
 
@@ -50,10 +64,18 @@ const NEUTRAL_INPUT: FrameInput = { buttons: 0 };
 const GAME_ROOM_EVENT = {
   input: "fight-input",
   selection: "fight-selection",
+  matchResultAction: "fight-match-result-action",
+  rematchStart: "fight-rematch-start",
 } as const;
 
 /** オンライン通信で許可するカラーID一覧。 */
 const COLOR_VARIANT_IDS = new Set<ColorVariant>(COLOR_VARIANTS);
+/** オンライン同期で許可する試合終了後の操作一覧。 */
+const MATCH_RESULT_ACTIONS = new Set<MatchResultAction>([
+  "rematch",
+  "character-select",
+  "top",
+]);
 
 /** 受信ペイロードがオブジェクトかを検証する。 */
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -85,6 +107,9 @@ export class RoomClient {
   private readonly readyHandlers = new Set<ReadyHandler>();
   private readonly inputHandlers = new Set<InputHandler>();
   private readonly selectionHandlers = new Set<SelectionHandler>();
+  private readonly matchResultActionHandlers =
+    new Set<MatchResultActionHandler>();
+  private readonly rematchStartHandlers = new Set<RematchStartHandler>();
   private readonly closeHandlers = new Set<VoidHandler>();
   private readonly opponentLeftHandlers = new Set<VoidHandler>();
 
@@ -96,6 +121,12 @@ export class RoomClient {
     );
     this.room.onEvent(GAME_ROOM_EVENT.selection, (payload) =>
       this.receiveSelection(payload),
+    );
+    this.room.onEvent(GAME_ROOM_EVENT.matchResultAction, (payload) =>
+      this.receiveMatchResultAction(payload),
+    );
+    this.room.onEvent(GAME_ROOM_EVENT.rematchStart, (payload) =>
+      this.receiveRematchStart(payload),
     );
   }
 
@@ -110,13 +141,38 @@ export class RoomClient {
   }
 
   /** 決定論的同期に使う入力ビットを相手へ送る。 */
-  public sendInput(frame: number, buttons: number): void {
-    this.room.sendEvent(GAME_ROOM_EVENT.input, { frame, buttons });
+  public sendInput(frame: number, buttons: number, matchEpoch: number): void {
+    this.room.sendEvent(GAME_ROOM_EVENT.input, {
+      frame,
+      buttons,
+      matchEpoch,
+    });
   }
 
   /** キャラクター選択で決定したIDとカラーを相手へ送る。 */
   public sendSelection(characterId: string, color: ColorVariant): void {
     this.room.sendEvent(GAME_ROOM_EVENT.selection, { characterId, color });
+  }
+
+  /** 試合終了モーダルで選んだ次の画面への操作を相手へ送る。 */
+  public sendMatchResultAction(
+    action: MatchResultAction,
+    matchEpoch: number,
+  ): void {
+    this.room.sendEvent(GAME_ROOM_EVENT.matchResultAction, {
+      action,
+      matchEpoch,
+    });
+  }
+
+  /**
+   * P1だけが送る再試合開始通知。
+   * 通知を先に送ってから入力同期を再生成することで、P2が旧同期へ新試合の入力を受け取る競合を防ぐ。
+   */
+  public sendRematchStart(matchEpoch: number): void {
+    // P1以外からの開始通知は無視し、片側だけが同期を初期化する事故を防ぐ。
+    if (this.player !== 0) return;
+    this.room.sendEvent(GAME_ROOM_EVENT.rematchStart, { matchEpoch });
   }
 
   /** ロビー表示用の通信状態を登録する。 */
@@ -130,13 +186,27 @@ export class RoomClient {
   }
 
   /** 相手のフレーム入力受信処理を登録する。 */
-  public onInput(handler: InputHandler): void {
+  public onInput(handler: InputHandler): () => void {
     this.inputHandlers.add(handler);
+    return () => this.inputHandlers.delete(handler);
   }
 
   /** 相手のキャラクター・カラー選択受信処理を登録する。 */
-  public onSelection(handler: SelectionHandler): void {
+  public onSelection(handler: SelectionHandler): () => void {
     this.selectionHandlers.add(handler);
+    return () => this.selectionHandlers.delete(handler);
+  }
+
+  /** 相手が試合終了モーダルで選んだ操作を登録し、解除関数を返す。 */
+  public onMatchResultAction(handler: MatchResultActionHandler): () => void {
+    this.matchResultActionHandlers.add(handler);
+    return () => this.matchResultActionHandlers.delete(handler);
+  }
+
+  /** P1からの再試合開始通知を登録し、解除関数を返す。 */
+  public onRematchStart(handler: RematchStartHandler): () => void {
+    this.rematchStartHandlers.add(handler);
+    return () => this.rematchStartHandlers.delete(handler);
   }
 
   /** 予期しない通信切断処理を登録する。 */
@@ -186,16 +256,22 @@ export class RoomClient {
     if (!isRecord(payload)) return;
     const frame = payload.frame;
     const buttons = payload.buttons;
+    const matchEpoch = payload.matchEpoch;
     if (
       typeof frame !== "number" ||
       typeof buttons !== "number" ||
+      typeof matchEpoch !== "number" ||
       !Number.isInteger(frame) ||
       !Number.isInteger(buttons) ||
-      frame < 0
+      !Number.isInteger(matchEpoch) ||
+      frame < 0 ||
+      matchEpoch < 0
     ) {
       return;
     }
-    this.inputHandlers.forEach((handler) => handler(frame, buttons));
+    this.inputHandlers.forEach((handler) =>
+      handler(frame, buttons, matchEpoch),
+    );
   }
 
   /** 任意イベントからキャラクターIDとカラーIDを取り出す。 */
@@ -216,6 +292,39 @@ export class RoomClient {
     );
   }
 
+  /** 受信した試合終了後の操作が許可された値か検証して通知する。 */
+  private receiveMatchResultAction(payload: unknown): void {
+    if (!isRecord(payload)) return;
+    const action = payload.action;
+    const matchEpoch = payload.matchEpoch;
+    if (
+      typeof action !== "string" ||
+      !MATCH_RESULT_ACTIONS.has(action as MatchResultAction) ||
+      typeof matchEpoch !== "number" ||
+      !Number.isInteger(matchEpoch) ||
+      matchEpoch < 0
+    ) {
+      return;
+    }
+    this.matchResultActionHandlers.forEach((handler) =>
+      handler(action as MatchResultAction, matchEpoch),
+    );
+  }
+
+  /** P1が送信した再試合開始通知を、登録済みの画面へ配信する。 */
+  private receiveRematchStart(payload: unknown): void {
+    if (!isRecord(payload)) return;
+    const matchEpoch = payload.matchEpoch;
+    if (
+      typeof matchEpoch !== "number" ||
+      !Number.isInteger(matchEpoch) ||
+      matchEpoch < 0
+    ) {
+      return;
+    }
+    this.rematchStartHandlers.forEach((handler) => handler(matchEpoch));
+  }
+
   /** 登録済みのステータス表示へ通知する。 */
   private status(message: string): void {
     this.statusHandlers.forEach((handler) => handler(message));
@@ -232,6 +341,9 @@ export class OnlineFrameBridge {
 
   // 相手側の入力履歴
   private readonly remoteInputs = new Map<number, FrameInput>();
+
+  /** RoomClientへ登録した入力受信処理を解除する関数。 */
+  private readonly unsubscribeInput: () => void;
 
   /** 送信済みの自分入力で、最も先のシミュレーションフレーム。 */
   private highestLocalInputFrame: number;
@@ -255,6 +367,8 @@ export class OnlineFrameBridge {
   public constructor(
     private readonly client: RoomClient,
     options: Partial<OnlineInputDelayOptions> = {},
+    /** 再試合ごとに切り替える試合世代。古い試合の遅延入力を混在させない。 */
+    private readonly matchEpoch = 0,
   ) {
     const minFrames = this.validFrameOption(
       options.minFrames,
@@ -296,14 +410,25 @@ export class OnlineFrameBridge {
       this.remoteInputs.set(frame, { ...NEUTRAL_INPUT });
     }
 
-    client.onInput((frame, buttons) => {
-      if (frame <= this.lastConsumedFrame) return;
-      this.remoteInputs.set(frame, { buttons });
-      this.highestRemoteInputFrame = Math.max(
-        this.highestRemoteInputFrame,
-        frame,
-      );
-    });
+    this.unsubscribeInput = client.onInput(
+      (frame, buttons, receivedMatchEpoch) => {
+        // 再試合直前に送られた旧世代の入力は、新しいフレーム0へ混ぜない。
+        if (receivedMatchEpoch !== this.matchEpoch) return;
+        if (frame <= this.lastConsumedFrame) return;
+        this.remoteInputs.set(frame, { buttons });
+        this.highestRemoteInputFrame = Math.max(
+          this.highestRemoteInputFrame,
+          frame,
+        );
+      },
+    );
+  }
+
+  /** オンライン入力同期を破棄し、受信購読と保持済み入力を解放する。 */
+  public destroy(): void {
+    this.unsubscribeInput();
+    this.localInputs.clear();
+    this.remoteInputs.clear();
   }
 
   /** 現在の通信状況から選ばれた入力遅延フレーム数を返す。 */
@@ -356,7 +481,7 @@ export class OnlineFrameBridge {
     ) {
       const snapshot = { buttons };
       this.localInputs.set(target, snapshot);
-      this.client.sendInput(target, snapshot.buttons);
+      this.client.sendInput(target, snapshot.buttons, this.matchEpoch);
     }
     this.highestLocalInputFrame = Math.max(
       this.highestLocalInputFrame,

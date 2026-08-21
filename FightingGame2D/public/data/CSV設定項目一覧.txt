@@ -50,23 +50,25 @@ sample,SAMPLE,stick,,,#4FD8FF,#FFC857,10000,330,1900,52,120,0
 列名                 内容
 command_id           コマンドを識別する一意のIDです。moves.csv の command_id に記入します。
 sequence             テンキー表記の入力列です。入力同士は > で区切ります。例: 2>3>6 は波動拳入力です。
-max_frames           最初の方向入力から最後の方向入力までに許される最大フレーム数です。入力数-1以上の整数を指定します。
+max_frames           通常コマンドでは最初の方向入力、溜めコマンドでは後続方向入力から技ボタンを押すまでに許される最大フレーム数です。入力数に応じた整数を指定します。
 priority             同時成立時の優先度です。0～100の整数です。大きいほど優先されます。
+charge_frames        溜め時間です。0は通常コマンドです。1以上の場合はsequenceの先頭を4にし、4・1・7の後ろ入力を前入力なしで指定フレーム維持してから、残りのsequenceと技ボタンを入力します。溜め区間ではニュートラル・上下入力など前方向を含まない途切れを合計4Fまで許容します。5F以上の途切れ、前入力、左右同時押しは不成立です。溜め時間はmax_framesに含めず、技ボタンを押した時点から後続入力を逆算して判定します。
 
 テンキー表記（向きに対して相対）
 7: 斜め後ろ上   8: 上       9: 斜め前上
 4: 後ろ         5: ニュートラル 6: 前
 1: 斜め後ろ下   2: 下       3: 斜め前下
 
-最後の方向入力後、攻撃ボタンを押すまでには2フレームの猶予があります。
-例: 2>3>6,27,10 は、27フレーム以内に下・斜め前下・前を入力するコマンドです。
+最後の方向入力後、攻撃ボタンを押すまでには6フレームの猶予があります。
+例: 2>3>6,27,10,0 は、27フレーム以内に下・斜め前下・前を入力する通常コマンドです。
+例: 4>6,42,35,40 は、40フレーム以上後ろを溜めた後に前＋技ボタンで発動する溜めコマンドです。溜めを長く維持してもmax_framesは消費しません。溜め入力は技の演出・硬直中にも記録されます。
 
 
 3. moves.csv
 -------------
 
 通常技、必殺技、投げ、飛び道具を定義します。1行が1つの技です。
-startup、active、recovery、invincible_frames、hitstun、projectile_lifetime は60 FPS基準のフレーム数です。
+startup、active、recovery、invincible_frames、hitstun、guard_stun、projectile_lifetime は60 FPS基準のフレーム数です。
 
 列名                 内容
 character_id         技を使用できるキャラクターのIDです。characters.csv の id を指定します。all を指定すると共通技になります。
@@ -81,13 +83,16 @@ special_gauge_cost   必殺技ゲージの消費量です。0～100で指定し�
 super_gauge_gain     超必殺ゲージの増加量です。0～300で指定します。技を出した時に加算され、最大値は300です。
 guard_bleak          ガード貫通かどうかです。true でガード不能、false で通常のガード判定を行います。投げにも true を指定します。
 starter_proration    始動補正です。コンボの初期倍率を増減する整数です。20なら120%、-10なら90%、0なら100%です。下限は10%です。
-range_x              近接攻撃判定の前方への届く距離です。単位はピクセルです。押し込み判定が発生する位置から測ります。
-range_y              近接攻撃判定の上下方向の許容距離です。単位はピクセルです。空中攻撃・対空技の高さに合わせます。
+range_x              近接攻撃判定の前方への届く距離です。単位はピクセルです。押し込み判定が発生する位置から測ります。投げでは投げ間合いになります。
+range_y              近接攻撃判定の上下方向の許容距離です。単位はピクセルです。空中攻撃・対空技の高さに合わせます。投げでは成立する高さの許容距離になります。
 self_move_x          技中に自キャラを前方へ動かす速度です。単位はピクセル/秒です。正の値で前方、負の値で後方へ動きます。
 self_move_y          技中に自キャラを上下へ動かす速度です。単位はピクセル/秒です。正の値で上方、負の値で下方へ動きます。
-knockback_x          ヒットした相手を横へ押し出す強さです。0で横方向のノックバックなしです。
+knockback_x          ヒットした相手を横へ押し出す強さです。0で横方向のノックバックなしです。前投げでは投げられた相手の吹き飛び量になります。
 knockback_y          ヒットした相手を上へ打ち上げる強さです。正の値で打ち上げ、0で打ち上げなしです。
+guard_knockback_x    ガードした相手を後方へ押し出す横方向の強さです。0以上の数値を指定します。0で相手は後退しません。
+guard_self_knockback_x ガードされた攻撃側を後方へ押し出す横方向の強さです。0以上の数値を指定します。0で自分は後退しません。
 hitstun              ヒットした相手が行動できなくなるフレーム数です。30を超える非ガードヒットでは5フレームの演出停止が入ります。
+guard_stun           ガードした相手が行動できなくなるフレーム数です。0以上の整数を指定します。0ならガード硬直なしです。
 animation            技中に再生するアニメーション名です。idle、walk、jump、light、heavy、special、hit、block、ko を指定します。
 attack_type          攻撃の種類です。melee は近接攻撃、projectile は飛び道具です。
 projectile_speed     attack_type=projectile の飛行速度です。単位はピクセル/秒です。meleeでは0にします。
@@ -99,8 +104,8 @@ command_id           必殺技コマンドです。commands.csv の command_id �
 cancel_into          この技からキャンセルして出せる攻撃種別です。light、heavy、special、throw を | 区切りで指定します。空欄はキャンセル不可です。
 
 記入例（波動拳）
-character_id,move_id,button,startup,active,recovery,invincible_frames,damage,special_gauge_cost,super_gauge_gain,guard_bleak,starter_proration,range_x,range_y,self_move_x,self_move_y,knockback_x,knockback_y,hitstun,animation,attack_type,projectile_speed,projectile_lifetime,use_state,attack_level,projectile_id,command_id,cancel_into
-sample,hadoken,special,13,7,25,0,500,10,15,false,0,0,0,0,0,300,0,15,special,projectile,720,110,ground,mid,hadoken_blue,hadoken,
+character_id,move_id,button,startup,active,recovery,invincible_frames,damage,special_gauge_cost,super_gauge_gain,guard_bleak,starter_proration,range_x,range_y,self_move_x,self_move_y,knockback_x,knockback_y,guard_knockback_x,guard_self_knockback_x,hitstun,guard_stun,animation,attack_type,projectile_speed,projectile_lifetime,use_state,attack_level,projectile_id,command_id,cancel_into
+sample,hadoken,special,13,7,25,0,500,10,15,false,0,0,0,0,0,300,0,100,80,15,8,special,projectile,720,110,ground,mid,hadoken_blue,hadoken,
 
 設定上の注意
 - command_id を持つ必殺技も、cancel_into に special が含まれる技からはコマンド入力なしでキャンセルできます。

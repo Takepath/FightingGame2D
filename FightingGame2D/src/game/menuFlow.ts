@@ -66,6 +66,10 @@ export class MenuFlow {
   private readonly lobby: RoomLobby;
   private mode: MenuMode = "local";
   private onlineClient: RoomClient | null = null;
+  /** オンライン接続中に登録する、相手の選択受信処理の解除関数。 */
+  private removeOnlineSelectionListener: (() => void) | null = null;
+  /** 対戦画面中に相手が先に送った、次回キャラクター選択用の選択結果。 */
+  private queuedOnlineChoice: PlayerSelection | null = null;
   /** カラー決定前の、ローカル側で選んだキャラクター。 */
   private pendingChoice: CharacterChoice | null = null;
   /** ローカル側でカラーまで決定した選択結果。 */
@@ -105,7 +109,8 @@ export class MenuFlow {
 
     this.lobby = new RoomLobby(
       (client) => this.showCharacterSelect("online", client),
-      () => this.showTop(),
+      // 対戦中に相手が退出した場合も、Pixi画面を破棄してTopへ戻す。
+      () => this.returnToTop(),
       this.config.onlineRoom,
     );
     this.showTop();
@@ -117,8 +122,11 @@ export class MenuFlow {
       window.clearTimeout(this.matchupTimer);
       this.matchupTimer = null;
     }
+    this.removeOnlineSelectionListener?.();
+    this.removeOnlineSelectionListener = null;
     this.mode = "local";
     this.onlineClient = null;
+    this.queuedOnlineChoice = null;
     this.pendingChoice = null;
     this.localChoice = null;
     this.remoteChoice = null;
@@ -138,6 +146,16 @@ export class MenuFlow {
     this.showTop();
   }
 
+  /** 試合終了後、接続を維持したままモードに応じたキャラクター選択へ戻る。 */
+  private returnToCharacterSelect(client?: RoomClient): void {
+    this.engine.navigation.clearScreen();
+    if (client) {
+      this.showCharacterSelect("online", client);
+      return;
+    }
+    this.showCharacterSelect("local");
+  }
+
   /** Online選択時に待ち受け背景と合言葉ロビーを表示する。 */
   private showOnlineWaiting(): void {
     this.topMenu.classList.add("is-hidden");
@@ -150,11 +168,20 @@ export class MenuFlow {
 
   /** モードに合わせた説明と9枚のカードを表示し、選択を受け付ける。 */
   private showCharacterSelect(mode: MenuMode, client?: RoomClient): void {
+    // 対戦中に相手が先に送信した選択は、新しい選択画面へ引き継ぐ。
+    const queuedOnlineChoice =
+      mode === "online" && client === this.onlineClient
+        ? this.queuedOnlineChoice
+        : null;
+    // 前回の選択画面や試合画面で残った受信処理を外し、二重に遷移しないようにする。
+    this.removeOnlineSelectionListener?.();
+    this.removeOnlineSelectionListener = null;
     this.mode = mode;
     this.onlineClient = client ?? null;
+    this.queuedOnlineChoice = null;
     this.pendingChoice = null;
     this.localChoice = null;
-    this.remoteChoice = null;
+    this.remoteChoice = queuedOnlineChoice;
     this.matchStarting = false;
     this.topMenu.classList.add("is-hidden");
     this.onlineWaiting.classList.add("is-hidden");
@@ -169,18 +196,27 @@ export class MenuFlow {
       this.characterTitle.textContent = `PLAYER ${client.player! + 1} のキャラクターを選択してください`;
       this.characterStatus.textContent =
         "相手もキャラクターを選択するまで待機します。";
-      client.onSelection((choiceId, color) => {
-        if (this.onlineClient !== client) return;
-        const choice = this.choices.find(
-          (candidate) => candidate.choiceId === choiceId,
-        );
-        this.remoteChoice = choice ? { choice, color } : null;
-        if (this.remoteChoice && !this.localChoice) {
-          this.characterStatus.textContent =
-            "相手が選択を完了しました。あなたのキャラクターとカラーを選んでください。";
-        }
-        this.startOnlineMatchIfReady();
-      });
+      this.removeOnlineSelectionListener = client.onSelection(
+        (choiceId, color) => {
+          if (this.onlineClient !== client) return;
+          const choice = this.choices.find(
+            (candidate) => candidate.choiceId === choiceId,
+          );
+          const selection = choice ? { choice, color } : null;
+          if (!selection) return;
+          // 相手が先にキャラクター選択へ戻った場合も、イベントを捨てず次の選択画面へ引き継ぐ。
+          if (this.matchStarting) {
+            this.queuedOnlineChoice = selection;
+            return;
+          }
+          this.remoteChoice = selection;
+          if (this.remoteChoice && !this.localChoice) {
+            this.characterStatus.textContent =
+              "相手が選択を完了しました。あなたのキャラクターとカラーを選んでください。";
+          }
+          this.startOnlineMatchIfReady();
+        },
+      );
     } else {
       this.characterTitle.textContent = "キャラクターを選択してください";
       if (mode === "training") {
@@ -189,6 +225,10 @@ export class MenuFlow {
       } else {
         this.setCpuLevel(this.cpuLevel);
       }
+    }
+    if (this.remoteChoice && mode === "online") {
+      this.characterStatus.textContent =
+        "相手が選択を完了しました。あなたのキャラクターとカラーを選んでください。";
     }
     this.renderChoices();
   }
@@ -536,6 +576,7 @@ export class MenuFlow {
     selectedCharacters: readonly [CharacterDefinition, CharacterDefinition],
     client?: RoomClient,
   ): Promise<void> {
+    // 対戦中も選択イベントを1件だけ監視し、相手が先に戻った時の選択を次回画面へ引き継ぐ。
     this.matchupScreen.classList.add("is-hidden");
     // トレーニングではP2の入力を固定し、練習専用の対戦にする。
     MatchScreen.configure(
@@ -543,7 +584,10 @@ export class MenuFlow {
       selectedCharacters,
       this.mode === "training",
       this.mode === "local" ? this.cpuLevel : null,
-      () => this.returnToTop(),
+      {
+        returnToTop: () => this.returnToTop(),
+        returnToCharacterSelect: () => this.returnToCharacterSelect(client),
+      },
     );
     await this.engine.navigation.showScreen(MatchScreen);
     const match = this.engine.navigation.currentScreen;

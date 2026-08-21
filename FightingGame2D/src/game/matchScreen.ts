@@ -15,7 +15,11 @@ import {
   KEYBOARD_ACTIONS,
   type KeyBindingTarget,
 } from "./input";
-import { OnlineFrameBridge, RoomClient } from "./online";
+import {
+  OnlineFrameBridge,
+  RoomClient,
+  type MatchResultAction,
+} from "./online";
 import { FIGHTING_GAME_CONFIG } from "./gameConfig";
 import {
   FRAMES_PER_SECOND,
@@ -52,6 +56,15 @@ const MAX_STEPS_PER_RENDER = 5;
 /** トレーニング画面の左端へ表示する、最新入力から遡る履歴の最大件数。 */
 const MAX_TRAINING_INPUT_HISTORY = 8;
 
+/** 同一入力をまとめて表示するための、ボタンと継続フレーム数。 */
+interface TrainingInputHistoryEntry {
+  readonly buttons: number;
+  elapsedFrames: number;
+}
+
+/** 入力履歴の継続時間として表示する最大フレーム数。 */
+const MAX_TRAINING_INPUT_ELAPSED_FRAMES = 99;
+
 /** 試合勝者の決定時に打ち上げる花火の本数。 */
 /** 超必殺ゲージは100単位のバーと、右側の百の位で表示する。 */
 const SUPER_GAUGE_BAR_MAX = 100;
@@ -68,6 +81,15 @@ const MATCH_RESULT_FIREWORK_HUES = [
 
 /** public配下に配置する、強い攻撃命中時の効果音ファイル。 */
 const HIT_STOP_SOUND_PATH = "data/sounds/slap-1.mp3";
+
+/**
+ * 試合終了モーダルから、メニュー画面へ戻るための遷移処理です。
+ * 実際の画面生成はMenuFlowに任せ、対戦画面はUI操作だけを担当します。
+ */
+type MatchResultNavigation = {
+  readonly returnToTop: () => void;
+  readonly returnToCharacterSelect: () => void;
+};
 
 /**
  * 対戦画面クラス
@@ -87,8 +109,8 @@ export class MatchScreen extends Container {
   /** nullならP2は人間操作、数値ならローカルCPUとして扱う。 */
   private static cpuLevel: CpuLevel | null = null;
 
-  /** 一時停止メニューからTop画面へ戻る処理。 */
-  private static returnToTop: (() => void) | null = null;
+  /** 一時停止・試合終了モーダルからメニューへ戻る処理。 */
+  private static resultNavigation: MatchResultNavigation | null = null;
 
   /** ゲーム画面全体 */
   private readonly world = new Container();
@@ -141,6 +163,34 @@ export class MatchScreen extends Container {
 
   /** Top画面へ戻るボタン。 */
   private readonly topButton = document.getElementById("pause-top")!;
+
+  /** 勝敗確定時に表示する、再試合・画面遷移専用のモーダル。 */
+  private readonly matchResultMenu =
+    document.getElementById("match-result-menu")!;
+
+  /** 試合勝者を表示する見出し。 */
+  private readonly matchResultTitle =
+    document.getElementById("match-result-title")!;
+
+  /** オンライン時の合意待ち状態を表示する領域。 */
+  private readonly matchResultStatus = document.getElementById(
+    "match-result-status",
+  )!;
+
+  /** 同じキャラクター・カラーで対戦をやり直すボタン。 */
+  private readonly rematchButton = document.getElementById(
+    "match-rematch",
+  )! as HTMLButtonElement;
+
+  /** キャラクター選択画面へ戻るボタン。 */
+  private readonly characterSelectButton = document.getElementById(
+    "match-character-select",
+  )! as HTMLButtonElement;
+
+  /** 試合終了モーダルからTop画面へ戻るボタン。 */
+  private readonly matchResultTopButton = document.getElementById(
+    "match-top",
+  )! as HTMLButtonElement;
 
   /** オプション画面から通常メニューへ戻るボタン。 */
   private readonly optionsBackButton =
@@ -251,14 +301,17 @@ export class MatchScreen extends Container {
   /** トレーニング中のP1入力履歴を縦並びで描画するText。 */
   private readonly trainingInputHistoryText: Text;
 
+  /** 各入力の継続フレームを、入力履歴の左側へ描画するText。 */
+  private readonly trainingInputHistoryFrameText: Text;
+
   /** 入力履歴表示のオン・オフ状態。トレーニング以外では常にオフ。 */
   private trainingInputHistoryEnabled = false;
 
   /** 被弾判定（赤）と有効中の攻撃判定（青）のトレーニング表示状態。 */
   private trainingCollisionDebugEnabled = false;
 
-  /** 最新入力を先頭に保持する、表示専用の入力履歴。 */
-  private readonly trainingInputHistory: number[] = [];
+  /** 最新入力を先頭に保持する、表示専用の入力履歴と継続フレーム。 */
+  private readonly trainingInputHistory: TrainingInputHistoryEntry[] = [];
 
   /** 同じ入力を押し続けた場合に履歴を増やさないための直前入力。 */
   private previousTrainingInputButtons = 0;
@@ -290,8 +343,38 @@ export class MatchScreen extends Container {
   /** オンライン同期 */
   private online: OnlineFrameBridge | null = null;
 
+  /** 現在のオンラインルーム接続。再試合時に同じルームを再利用する。 */
+  private onlineClient: RoomClient | null = null;
+
   /** 自分のプレイヤー番号 */
   private onlinePlayer: 0 | 1 | null = null;
+
+  /** 再試合ごとに増えるオンライン試合の世代番号。 */
+  private onlineMatchEpoch = 0;
+
+  /** P2が受け取った、次の再試合用の試合世代番号。 */
+  private pendingOnlineRematchEpoch: number | null = null;
+
+  /** 終了後の相手選択イベントを解除する関数。 */
+  private removeMatchResultActionListener: (() => void) | null = null;
+
+  /** P1からの再試合開始通知を解除する関数。 */
+  private removeRematchStartListener: (() => void) | null = null;
+
+  /** 自分が試合終了モーダルで選択した次の遷移。 */
+  private localMatchResultAction: MatchResultAction | null = null;
+
+  /** 相手が試合終了モーダルで選択した次の遷移。 */
+  private remoteMatchResultAction: MatchResultAction | null = null;
+
+  /** 同一試合で試合終了モーダルを重ねて開かないための状態。 */
+  private matchResultMenuShown = false;
+
+  /** P1が同じ試合で再試合開始通知を重複送信しないための状態。 */
+  private rematchStartSent = false;
+
+  /** P2が受信した再試合開始通知を、モーダル表示まで保持する状態。 */
+  private onlineRematchStartReceived = false;
 
   /** 花火用Canvasを重ねる、操作を受け付けない画面全体のレイヤー。 */
   private readonly fireworksLayer = document.getElementById("fireworks-layer")!;
@@ -310,13 +393,13 @@ export class MatchScreen extends Container {
     selectedCharacters: readonly [CharacterDefinition, CharacterDefinition],
     training = false,
     cpuLevel: CpuLevel | null = null,
-    returnToTop: (() => void) | null = null,
+    resultNavigation: MatchResultNavigation | null = null,
   ): void {
     MatchScreen.gameData = data;
     MatchScreen.selectedCharacters = selectedCharacters;
     MatchScreen.training = training;
     MatchScreen.cpuLevel = cpuLevel;
-    MatchScreen.returnToTop = returnToTop;
+    MatchScreen.resultNavigation = resultNavigation;
   }
 
   /**
@@ -421,6 +504,18 @@ export class MatchScreen extends Container {
         lineHeight: 31,
       },
     });
+    this.trainingInputHistoryFrameText = new Text({
+      text: "",
+      style: {
+        fontFamily: "Arial, sans-serif",
+        fontSize: 17,
+        fontWeight: "700",
+        fill: "#9bc0de",
+        stroke: { color: "#070b16", width: 3 },
+        lineHeight: 31,
+        align: "right",
+      },
+    });
     this.roundText.position.set(STAGE_WIDTH / 2, 18);
     // トレーニングはラウンド制を使わないため、ラウンド数のHUDを隠す。
     this.roundText.visible = !this.training;
@@ -434,7 +529,11 @@ export class MatchScreen extends Container {
       STAGE_WIDTH - 36 - SUPER_GAUGE_BAR_WIDTH - 18,
       649,
     );
-    this.trainingInputHistoryText.position.set(34, 128);
+    // 左列に経過フレーム、右列に入力を並べてコマンド入力の間隔を確認しやすくする。
+    this.trainingInputHistoryFrameText.anchor.set(1, 0);
+    this.trainingInputHistoryFrameText.position.set(76, 133);
+    this.trainingInputHistoryFrameText.visible = false;
+    this.trainingInputHistoryText.position.set(84, 128);
     this.trainingInputHistoryText.visible = false;
 
     // 描画順に追加
@@ -457,6 +556,7 @@ export class MatchScreen extends Container {
       this.comboText,
       this.superGaugeDigits[0],
       this.superGaugeDigits[1],
+      this.trainingInputHistoryFrameText,
       this.trainingInputHistoryText,
     );
 
@@ -509,40 +609,94 @@ export class MatchScreen extends Container {
       this.updateTrainingCpuSettings,
     );
     this.topButton.addEventListener("click", this.leaveToTop);
+    this.rematchButton.addEventListener("click", this.requestRematch);
+    this.characterSelectButton.addEventListener(
+      "click",
+      this.requestCharacterSelect,
+    );
+    this.matchResultTopButton.addEventListener(
+      "click",
+      this.requestTopFromMatchResult,
+    );
   }
 
   /**
    * オンライン対戦開始
    */
-  public startOnline(client: RoomClient): void {
+  public startOnline(client: RoomClient, matchEpoch = 0): void {
     if (client.player === null) return;
+    // 外部通信由来の値でも安全に扱えるよう、非負整数だけを試合世代として採用する。
+    const normalizedMatchEpoch =
+      Number.isInteger(matchEpoch) && matchEpoch >= 0 ? matchEpoch : 0;
+
+    // 同じ画面で再試合した場合も、古い入力購読を残さず新しい同期ブリッジへ差し替える。
+    this.online?.destroy();
+    this.removeMatchResultActionListener?.();
+    this.removeRematchStartListener?.();
 
     // 通信の揺らぎに合わせて入力遅延を可変調整する同期ブリッジを開始する。
     this.online = new OnlineFrameBridge(
       client,
       FIGHTING_GAME_CONFIG.onlineSync,
+      normalizedMatchEpoch,
     );
+    this.onlineClient = client;
     this.onlinePlayer = client.player;
-
-    this.synchronizer.reset();
-    this.simulation.resetMatch();
-    this.previousHitStopFrames = 0;
-    this.accumulatorMs = 0;
+    this.onlineMatchEpoch = normalizedMatchEpoch;
+    this.removeMatchResultActionListener = client.onMatchResultAction(
+      this.receiveMatchResultAction,
+    );
+    this.removeRematchStartListener = client.onRematchStart(
+      this.receiveOnlineRematchStart,
+    );
+    this.resetMatchState();
   }
 
   /**
    * オンライン対戦終了
    */
   public stopOnline(): void {
-    if (!this.online) return;
-
+    this.online?.destroy();
     this.online = null;
+    this.onlineClient = null;
     this.onlinePlayer = null;
+    this.onlineMatchEpoch = 0;
+    this.pendingOnlineRematchEpoch = null;
+    this.removeMatchResultActionListener?.();
+    this.removeMatchResultActionListener = null;
+    this.removeRematchStartListener?.();
+    this.removeRematchStartListener = null;
+    this.resetMatchState();
+  }
 
+  /** 再試合・オンライン再接続で共有する、試合状態と表示キャッシュの初期化処理。 */
+  private resetMatchState(): void {
     this.synchronizer.reset();
     this.simulation.resetMatch();
+    // CPUのコマンド途中状態も消し、再試合を初回対戦と同じ条件で始める。
+    this.cpu?.reset();
     this.previousHitStopFrames = 0;
     this.accumulatorMs = 0;
+    this.paused = false;
+    this.closeMatchResultMenu();
+    this.fireworksLaunchedForMatch = false;
+    this.localMatchResultAction = null;
+    this.remoteMatchResultAction = null;
+    this.rematchStartSent = false;
+    this.onlineRematchStartReceived = false;
+    this.pendingOnlineRematchEpoch = null;
+    this.displayedHealth[0] = -1;
+    this.displayedHealth[1] = -1;
+    this.displayedSpecialGauge[0] = -1;
+    this.displayedSpecialGauge[1] = -1;
+    this.displayedSuperGauge[0] = -1;
+    this.displayedSuperGauge[1] = -1;
+    this.projectileArt.clear();
+    this.clearProjectileSprites();
+    this.hadProjectiles = false;
+    this.matchResultFireworks.forEach((fireworksAtPoint) => {
+      fireworksAtPoint.forEach((fireworks) => fireworks.stop(true));
+    });
   }
 
   /**
@@ -553,7 +707,11 @@ export class MatchScreen extends Container {
     // Home は Esc と同じ固定キャンセル。停止中も監視して再開操作を受け付ける。
     if (this.input.consumeGamepadHomePress()) this.handleCancelInput();
     this.captureGamepadBinding();
-    if (this.paused) return;
+    // 試合終了モーダル中のオンライン対戦だけは、遅れている相手が同じ終了フレームへ
+    // 到達できるよう、ニュートラルを含む入力同期を継続する。
+    if (this.paused && !(this.online && this.isMatchResultMenuOpen())) {
+      return;
+    }
 
     this.accumulatorMs += Math.min(time.deltaMS, 250);
 
@@ -636,7 +794,9 @@ export class MatchScreen extends Container {
 
   /** フォーカス復帰 */
   public focus(): void {
-    if (!this.isPauseMenuOpen()) this.paused = false;
+    if (!this.isPauseMenuOpen() && !this.isMatchResultMenuOpen()) {
+      this.paused = false;
+    }
   }
 
   /** 終了処理 */
@@ -689,8 +849,26 @@ export class MatchScreen extends Container {
       this.updateTrainingCpuSettings,
     );
     this.topButton.removeEventListener("click", this.leaveToTop);
+    this.rematchButton.removeEventListener("click", this.requestRematch);
+    this.characterSelectButton.removeEventListener(
+      "click",
+      this.requestCharacterSelect,
+    );
+    this.matchResultTopButton.removeEventListener(
+      "click",
+      this.requestTopFromMatchResult,
+    );
+    this.online?.destroy();
+    this.online = null;
+    this.onlineClient = null;
+    this.onlinePlayer = null;
+    this.removeMatchResultActionListener?.();
+    this.removeMatchResultActionListener = null;
+    this.removeRematchStartListener?.();
+    this.removeRematchStartListener = null;
     this.stopKeyBinding();
     this.closePauseMenu();
+    this.closeMatchResultMenu();
     this.input.destroy();
   }
 
@@ -708,6 +886,8 @@ export class MatchScreen extends Container {
       this.keyConfigStatus.textContent = "入力の変更を取り消しました。";
       return;
     }
+    // 試合終了後は結果モーダルの選択を確定するまで、Esc/Homeで通常の一時停止を重ねない。
+    if (this.isMatchResultMenuOpen()) return;
     if (!this.isPauseMenuOpen()) {
       this.openPauseMenu();
     } else if (this.isOptionsOpen()) {
@@ -719,6 +899,7 @@ export class MatchScreen extends Container {
 
   /** 試合を停止して通常メニューを画面中央へ表示する。 */
   private openPauseMenu = (): void => {
+    if (this.isMatchResultMenuOpen()) return;
     this.paused = true;
     this.accumulatorMs = 0;
     this.showMainMenu();
@@ -980,7 +1161,9 @@ export class MatchScreen extends Container {
     this.trainingInputHistory.length = 0;
     this.previousTrainingInputButtons = 0;
     this.trainingInputHistoryArt.clear();
+    this.trainingInputHistoryFrameText.text = "";
     this.trainingInputHistoryText.text = "";
+    this.trainingInputHistoryFrameText.visible = nextEnabled;
     this.trainingInputHistoryText.visible = nextEnabled;
   }
 
@@ -1023,7 +1206,7 @@ export class MatchScreen extends Container {
     }
   }
 
-  /** P1の入力変化だけを、最新順のトレーニング入力履歴へ記録する。 */
+  /** P1の同一入力をまとめ、切替時に直前入力の継続フレームを確定する。 */
   private recordTrainingInputHistory(buttons: number): void {
     if (!this.trainingInputHistoryEnabled) return;
 
@@ -1037,30 +1220,52 @@ export class MatchScreen extends Container {
         InputButton.Heavy |
         InputButton.Special |
         InputButton.Throw);
-    if (trackedButtons === this.previousTrainingInputButtons) return;
+    if (trackedButtons === this.previousTrainingInputButtons) {
+      const currentEntry = this.trainingInputHistory[0];
+      if (
+        trackedButtons !== 0 &&
+        currentEntry?.buttons === trackedButtons &&
+        currentEntry.elapsedFrames < MAX_TRAINING_INPUT_ELAPSED_FRAMES
+      ) {
+        currentEntry.elapsedFrames += 1;
+        this.renderTrainingInputHistory();
+      }
+      return;
+    }
 
     this.previousTrainingInputButtons = trackedButtons;
     // ニュートラルへの復帰は表示せず、次の同一入力を再度記録できるようにする。
     if (trackedButtons === 0) return;
 
-    this.trainingInputHistory.unshift(trackedButtons);
+    this.trainingInputHistory.unshift({
+      buttons: trackedButtons,
+      // 切替直後は1Fとして始め、次の固定フレームから同一入力へ加算する。
+      elapsedFrames: 1,
+    });
     if (this.trainingInputHistory.length > MAX_TRAINING_INPUT_HISTORY) {
       this.trainingInputHistory.pop();
     }
     this.renderTrainingInputHistory();
   }
 
-  /** 入力履歴を矢印・攻撃名へ変換して、画面左端の縦並びへ描画する。 */
+  /** 入力履歴を継続フレーム・矢印・攻撃名へ変換して、画面左端へ縦並びで描画する。 */
   private renderTrainingInputHistory(): void {
-    const lines = this.trainingInputHistory.map((buttons) =>
-      this.formatTrainingInput(buttons),
+    const inputLines = this.trainingInputHistory.map((entry) =>
+      this.formatTrainingInput(entry.buttons),
     );
-    this.setTextIfChanged(this.trainingInputHistoryText, lines.join("\n"));
+    const frameLines = this.trainingInputHistory.map(
+      (entry) => String(entry.elapsedFrames) + "F",
+    );
+    this.setTextIfChanged(
+      this.trainingInputHistoryFrameText,
+      frameLines.join("\n"),
+    );
+    this.setTextIfChanged(this.trainingInputHistoryText, inputLines.join("\n"));
 
-    const panelHeight = Math.max(44, lines.length * 31 + 18);
+    const panelHeight = Math.max(44, inputLines.length * 31 + 18);
     this.trainingInputHistoryArt.clear();
     this.trainingInputHistoryArt
-      .roundRect(18, 116, 112, panelHeight, 8)
+      .roundRect(18, 116, 194, panelHeight, 8)
       .fill({ color: 0x071425, alpha: 0.8 })
       .stroke({ color: 0x4fc3dd, width: 1, alpha: 0.75 });
   }
@@ -1094,11 +1299,207 @@ export class MatchScreen extends Container {
     return !this.pauseMenu.classList.contains("is-hidden");
   }
 
+  /** 試合終了後の再試合・遷移モーダルが表示中かを返す。 */
+  private isMatchResultMenuOpen(): boolean {
+    return !this.matchResultMenu.classList.contains("is-hidden");
+  }
+
   /** 試合を終了し、画面遷移をMenuFlowへ委譲する。 */
   private leaveToTop = (): void => {
     this.closePauseMenu();
-    MatchScreen.returnToTop?.();
+    MatchScreen.resultNavigation?.returnToTop();
   };
+
+  /** 勝敗確定後に一度だけ、次の対戦先を選ぶモーダルを開く。 */
+  private openMatchResultMenuIfNeeded(): void {
+    if (
+      this.training ||
+      this.simulation.matchWinner === null ||
+      this.matchResultMenuShown
+    ) {
+      return;
+    }
+
+    this.matchResultMenuShown = true;
+    this.paused = true;
+    this.accumulatorMs = 0;
+    this.localMatchResultAction = null;
+    this.rematchStartSent = false;
+    this.rematchButton.disabled = false;
+    this.characterSelectButton.disabled = false;
+    this.matchResultTopButton.disabled = false;
+    this.matchResultTitle.textContent = `P${this.simulation.matchWinner + 1} WINS THE MATCH`;
+    this.matchResultStatus.textContent = "";
+    this.matchResultMenu.classList.remove("is-hidden");
+    this.matchResultMenu.setAttribute("aria-hidden", "false");
+    this.rematchButton.focus();
+    // 先に届いていた相手の選択も、モーダルを表示した時点で必ず反映する。
+    this.applyStoredMatchResultAction();
+  }
+
+  /** 試合終了モーダルを閉じ、次の試合のために選択状態を初期化する。 */
+  private closeMatchResultMenu(): void {
+    this.matchResultMenu.classList.add("is-hidden");
+    this.matchResultMenu.setAttribute("aria-hidden", "true");
+    this.matchResultStatus.textContent = "";
+    this.matchResultMenuShown = false;
+  }
+
+  /** 再試合の合意待ち中は、次の遷移が途中で変わらないよう全操作を固定する。 */
+  private lockMatchResultChoices(): void {
+    this.rematchButton.disabled = true;
+    this.characterSelectButton.disabled = true;
+    this.matchResultTopButton.disabled = true;
+  }
+
+  /** 再試合ボタンの操作を、ローカルまたはオンライン同期へ振り分ける。 */
+  private requestRematch = (): void => {
+    this.requestMatchResultAction("rematch");
+  };
+
+  /** キャラクター選択ボタンの操作を、ローカルまたはオンライン同期へ振り分ける。 */
+  private requestCharacterSelect = (): void => {
+    this.requestMatchResultAction("character-select");
+  };
+
+  /** Top画面へ戻るボタンの操作を、ローカルまたはオンライン同期へ振り分ける。 */
+  private requestTopFromMatchResult = (): void => {
+    this.requestMatchResultAction("top");
+  };
+
+  /**
+   * 試合終了モーダルの操作を処理する。
+   * オンラインの再試合だけは、双方が再試合を選ぶまで開始を保留する。
+   */
+  private requestMatchResultAction(action: MatchResultAction): void {
+    if (!this.isMatchResultMenuOpen()) return;
+
+    if (!this.onlineClient) {
+      if (action === "rematch") {
+        this.restartMatch();
+      } else {
+        this.finishMatchNavigation(action);
+      }
+      return;
+    }
+
+    this.localMatchResultAction = action;
+    this.onlineClient.sendMatchResultAction(action, this.onlineMatchEpoch);
+
+    if (action === "rematch") {
+      this.lockMatchResultChoices();
+      this.tryStartOnlineRematch();
+      return;
+    }
+
+    // キャラクター選択・Topは、片方の選択を優先して両端末を同じ画面へ遷移させる。
+    this.finishMatchNavigation(action);
+  }
+
+  /** 相手の試合終了モーダル操作を受け、同じ遷移へ同期する。 */
+  private receiveMatchResultAction = (
+    action: MatchResultAction,
+    matchEpoch: number,
+  ): void => {
+    // 前試合の遅延イベントを、再試合後の選択として採用しない。
+    if (matchEpoch !== this.onlineMatchEpoch) return;
+    // こちらの同期フレームが数フレーム遅れていても選択を失わないよう、先に保持する。
+    this.remoteMatchResultAction = action;
+    this.applyStoredMatchResultAction();
+  };
+
+  /** 保持済みの相手選択を、結果モーダルの表示後に反映する。 */
+  private applyStoredMatchResultAction(): void {
+    if (!this.isMatchResultMenuOpen()) return;
+
+    const action = this.remoteMatchResultAction;
+    if (!action) return;
+    if (action === "rematch") {
+      if (this.localMatchResultAction === "rematch") {
+        this.tryStartOnlineRematch();
+      } else {
+        this.matchResultStatus.textContent =
+          "相手が再試合を希望しています。再試合を選ぶと開始します。";
+      }
+      return;
+    }
+
+    // 相手側のキャラクター選択・Topを優先し、片方だけが対戦画面に残らないようにする。
+    this.finishMatchNavigation(action);
+  }
+
+  /**
+   * 再試合を両者で合意した後の開始を制御する。
+   * P1は開始通知を先に送信してから同期ブリッジを初期化し、P2はその通知を受けてから初期化する。
+   */
+  private tryStartOnlineRematch(): void {
+    if (
+      !this.onlineClient ||
+      this.localMatchResultAction !== "rematch" ||
+      this.remoteMatchResultAction !== "rematch"
+    ) {
+      return;
+    }
+
+    if (this.onlinePlayer === 0) {
+      if (this.rematchStartSent) return;
+      this.rematchStartSent = true;
+      const nextMatchEpoch = this.onlineMatchEpoch + 1;
+      // WebSocketの送信順を利用し、P2にはこの通知より先に新試合の入力が届かないようにする。
+      this.onlineClient.sendRematchStart(nextMatchEpoch);
+      this.restartMatch(nextMatchEpoch);
+      return;
+    }
+
+    if (
+      this.onlinePlayer === 1 &&
+      this.onlineRematchStartReceived &&
+      this.pendingOnlineRematchEpoch !== null
+    ) {
+      this.restartMatch(this.pendingOnlineRematchEpoch);
+    } else {
+      this.matchResultStatus.textContent = "相手の再試合開始を待っています。";
+    }
+  }
+
+  /** P1からの開始通知を受けたP2だけが、同じキャラクターで再試合を開始する。 */
+  private receiveOnlineRematchStart = (matchEpoch: number): void => {
+    // 次世代以外の通知は、重複・遅延した古い開始通知として無視する。
+    if (this.onlinePlayer !== 1 || matchEpoch !== this.onlineMatchEpoch + 1) {
+      return;
+    }
+
+    // 終局表示より先に届いた場合も、選択通知と同様に保持してから合意後に開始する。
+    this.pendingOnlineRematchEpoch = matchEpoch;
+    this.onlineRematchStartReceived = true;
+    this.tryStartOnlineRematch();
+  };
+
+  /** 再試合以外の遷移をMenuFlowへ委譲する。 */
+  private finishMatchNavigation(
+    action: Exclude<MatchResultAction, "rematch">,
+  ): void {
+    this.closeMatchResultMenu();
+    if (action === "character-select") {
+      MatchScreen.resultNavigation?.returnToCharacterSelect();
+      return;
+    }
+    MatchScreen.resultNavigation?.returnToTop();
+  }
+
+  /** 同じキャラクター・カラー・CPU設定のまま、現在の対戦画面を初期化して再試合する。 */
+  private restartMatch(matchEpoch = this.onlineMatchEpoch): void {
+    if (this.training || !this.isMatchResultMenuOpen()) return;
+
+    const client = this.onlineClient;
+    this.closeMatchResultMenu();
+    if (client) {
+      this.startOnline(client, matchEpoch);
+    } else {
+      this.resetMatchState();
+    }
+    this.refreshViews();
+  }
 
   /**
    * 共通Text生成
@@ -1365,6 +1766,7 @@ export class MatchScreen extends Container {
     this.playHitStopSound();
     this.updateComboText();
     this.playMatchResultFireworks();
+    this.openMatchResultMenuIfNeeded();
     if (!this.training) {
       this.setTextIfChanged(
         this.roundText,

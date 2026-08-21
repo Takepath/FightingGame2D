@@ -240,7 +240,19 @@ function parseMoves(source: string): MoveDefinition[] {
     selfMoveY: Number(row.self_move_y) || 0,
     knockbackX: Number(row.knockback_x),
     knockbackY: Number(row.knockback_y),
+    // 旧CSVでは通常ノックバックの1/3をガード時の初期値として再現する。
+    guardKnockbackX: row.guard_knockback_x
+      ? Number(row.guard_knockback_x)
+      : Number(row.knockback_x) / 3,
+    // ガードされた攻撃側の後退量は、未指定なら従来どおり0にする。
+    guardSelfKnockbackX: row.guard_self_knockback_x
+      ? Number(row.guard_self_knockback_x)
+      : 0,
     hitstun: Number(row.hitstun),
+    // 旧CSVではヒットスタンの半分（最低1F）だったガード硬直を既定値にする。
+    guardStun: row.guard_stun
+      ? Number(row.guard_stun)
+      : Math.max(1, Math.trunc(Number(row.hitstun) / 2)),
 
     // 再生するアニメーション
     animation: toAction(row.animation),
@@ -296,6 +308,8 @@ function parseCommands(source: string): CommandDefinition[] {
     const maxFrames = Number(row.max_frames);
     // priority未指定の旧CSVは0として読み込み、既存のコマンド定義を壊さない。
     const priority = row.priority ? Number(row.priority) : 0;
+    // charge_frames未指定の旧CSVは0として読み込み、通常コマンドとして扱う。
+    const chargeFrames = row.charge_frames ? Number(row.charge_frames) : 0;
 
     if (!id) {
       throw new Error(
@@ -307,10 +321,12 @@ function parseCommands(source: string): CommandDefinition[] {
         `commands.csv の ${id} に有効な sequence を指定してください`,
       );
     }
-    if (
-      !Number.isInteger(maxFrames) ||
-      maxFrames < Math.max(0, sequence.length - 1)
-    ) {
+    // 溜めコマンドでは、先頭の4を維持する時間をmax_framesへ含めない。
+    const minimumCommandFrames =
+      chargeFrames > 0
+        ? Math.max(0, sequence.length - 2)
+        : Math.max(0, sequence.length - 1);
+    if (!Number.isInteger(maxFrames) || maxFrames < minimumCommandFrames) {
       throw new Error(
         `commands.csv の ${id} の max_frames は入力間隔を満たす整数にしてください`,
       );
@@ -321,11 +337,26 @@ function parseCommands(source: string): CommandDefinition[] {
       );
     }
 
+    if (!Number.isInteger(chargeFrames) || chargeFrames < 0) {
+      throw new Error(
+        "commands.csv の " +
+          id +
+          " の charge_frames は0以上の整数を指定してください",
+      );
+    }
+    if (chargeFrames > 0 && (sequence.length < 2 || sequence[0] !== "4")) {
+      throw new Error(
+        "commands.csv の " +
+          id +
+          " の溜めコマンドは sequence の先頭を4にしてください",
+      );
+    }
     return {
       id,
       sequence: sequence as CommandDirection[],
       maxFrames,
       priority,
+      chargeFrames,
     };
   });
 }
@@ -436,6 +467,25 @@ export async function loadGameData(
         "moves.csv の " +
           move.id +
           " の invincible_frames は0以上、技の全体フレーム以下の整数を指定してください",
+      );
+    }
+    if (
+      !Number.isFinite(move.guardKnockbackX) ||
+      move.guardKnockbackX < 0 ||
+      !Number.isFinite(move.guardSelfKnockbackX) ||
+      move.guardSelfKnockbackX < 0
+    ) {
+      throw new Error(
+        "moves.csv の " +
+          move.id +
+          " の guard_knockback_x / guard_self_knockback_x は0以上の数値を指定してください",
+      );
+    }
+    if (!Number.isInteger(move.guardStun) || move.guardStun < 0) {
+      throw new Error(
+        "moves.csv の " +
+          move.id +
+          " の guard_stun は0以上の整数フレームを指定してください",
       );
     }
     if (!Number.isInteger(move.damage) || move.damage < 0) {

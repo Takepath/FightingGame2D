@@ -26,8 +26,6 @@ const AIR_DRAG_PERCENT = 97;
 const PUSHBOX_PADDING = 8 * POSITION_SCALE;
 const ATTACK_CENTER_FROM_GROUND = 86 * POSITION_SCALE;
 const PROJECTILE_HITBOX_RADIUS = 14 * POSITION_SCALE;
-/** 投げ成功時、投げた側を通常技の最大リーチ外へ退かせる距離。 */
-const THROW_SELF_KNOCKBACK_DISTANCE = 320 * POSITION_SCALE;
 /** 投げ抜け時に両者を離す距離。 */
 const THROW_TECH_KNOCKBACK_DISTANCE = 120 * POSITION_SCALE;
 /** 投げ抜け時に両者へ与える横方向のノックバック速度。 */
@@ -48,7 +46,13 @@ const BUFFERABLE_ACTION_BUTTON_MASK = ATTACK_BUTTON_MASK | InputButton.Up;
 export const INPUT_BUFFER_FRAMES = 5;
 
 /** コマンドの最後の方向入力後に、技ボタンを受け付ける固定猶予フレーム数。 */
-const COMMAND_BUTTON_GRACE_FRAMES = 2;
+const COMMAND_BUTTON_GRACE_FRAMES = 6;
+
+/**
+ * 溜め入力中に後ろ方向が途切れても、前方向を入力していない合計4Fまでは
+ * 溜めを継続するための許容フレーム数。
+ */
+const CHARGE_INPUT_GAP_FRAMES = 4;
 
 /** 固定60FPSを秒数へ換算するためのフレーム数。 */
 export const FRAMES_PER_SECOND = 60;
@@ -126,6 +130,15 @@ export interface FighterCollisionDebug {
   readonly attackbox: CollisionDebugBox | null;
 }
 
+/**
+ * コマンド照合用の1フレーム分の入力です。
+ * 入力時点の向きを保存し、飛び越えによる自動振り向き後も過去入力を正しく解釈します。
+ */
+interface CommandInputHistoryEntry {
+  readonly buttons: number;
+  readonly facing: -1 | 1;
+}
+
 export interface FighterState {
   /** 固定小数点座標で保持する、各プレイヤーの決定論的な戦闘状態。 */
   readonly player: PlayerId;
@@ -179,7 +192,8 @@ export interface FighterState {
   previousButtons: number;
   /** 押下フレームから5フレーム先までの攻撃・ジャンプ押下を保持する先行入力履歴。 */
   bufferedActionHistory: number[];
-  inputHistory: number[];
+  /** コマンド入力時のボタンと向きを記録する、決定論的な履歴。 */
+  inputHistory: CommandInputHistoryEntry[];
 }
 
 export interface ProjectileState {
@@ -200,7 +214,13 @@ export interface ProjectileState {
   attackLevel: AttackLevel;
   knockbackX: number;
   knockbackY: number;
+  /** ガード成功側へ与える横方向の後退速度。 */
+  guardKnockbackX: number;
+  /** ガードされた攻撃側へ与える横方向の後退速度。 */
+  guardSelfKnockbackX: number;
   hitstun: number;
+  /** ガード成功側の操作を抑止する固定フレーム数。 */
+  guardStun: number;
 }
 
 export class MatchSimulation implements DeterministicSimulation {
@@ -261,7 +281,14 @@ export class MatchSimulation implements DeterministicSimulation {
     );
     this.inputHistoryLimit = Math.max(
       1,
-      ...commands.map((command) => command.maxFrames + 1),
+      ...commands.map((command) =>
+        Math.max(
+          INPUT_BUFFER_FRAMES + 1,
+          command.chargeFrames > 0
+            ? command.chargeFrames + command.maxFrames + 1
+            : command.maxFrames + 1,
+        ),
+      ),
     );
     this.roundIntroFrames = this.training ? 0 : ROUND_INTRO_FRAMES;
     this.fighters = [this.createFighter(0), this.createFighter(1)];
@@ -358,8 +385,8 @@ export class MatchSimulation implements DeterministicSimulation {
     FighterCollisionDebug,
   ] {
     return [
-      this.createCollisionDebug(this.fighters[0], this.fighters[1]),
-      this.createCollisionDebug(this.fighters[1], this.fighters[0]),
+      this.createCollisionDebug(this.fighters[0]),
+      this.createCollisionDebug(this.fighters[1]),
     ];
   }
 
@@ -406,10 +433,7 @@ export class MatchSimulation implements DeterministicSimulation {
   }
 
   /** 1キャラクター分の判定表示情報を、実際の判定式と同じ座標系で組み立てる。 */
-  private createCollisionDebug(
-    fighter: FighterState,
-    opponent: FighterState,
-  ): FighterCollisionDebug {
+  private createCollisionDebug(fighter: FighterState): FighterCollisionDebug {
     const centerX = fighter.x / POSITION_SCALE;
     const groundY = fighter.y / POSITION_SCALE;
     const hurtbox = {
@@ -427,26 +451,7 @@ export class MatchSimulation implements DeterministicSimulation {
       return { hurtbox, attackbox: null };
     }
 
-    if (move.button === InputButton.Throw) {
-      // 投げはリーチではなく、両者の押し込み判定が接触する範囲で成立する。
-      const horizontalRadius =
-        (this.hurtboxHalfWidth(fighter) +
-          this.hurtboxHalfWidth(opponent) +
-          PUSHBOX_PADDING * 2) /
-        POSITION_SCALE;
-      const verticalRadius = PASS_THROUGH_HEIGHT / POSITION_SCALE;
-      return {
-        hurtbox,
-        attackbox: {
-          x: centerX - horizontalRadius,
-          y: groundY - verticalRadius,
-          width: horizontalRadius * 2,
-          height: verticalRadius * 2,
-        },
-      };
-    }
-
-    // 通常の近接技は、自分の被弾判定前端から押し込み余白とrange_x/range_yへ伸びる箱として表示する。
+    // 近接技と投げは、自分の被弾判定前端から押し込み余白とrange_x/range_yへ伸びる箱として表示する。
     // この青箱と相手の赤箱が重なる範囲を、横方向の命中可能範囲と一致させる。
     const pushboxFront =
       centerX +
@@ -766,10 +771,20 @@ export class MatchSimulation implements DeterministicSimulation {
       ) {
         continue;
       }
+      const attackButtonFrame = this.bufferedActionInputFrame(
+        fighter,
+        move.button,
+      );
+      if (attackButtonFrame === null) continue;
 
       for (const commandId of move.commandIds) {
         const command = this.commandsById.get(commandId);
-        if (!command || !this.matchesCommand(fighter, commandId)) continue;
+        if (
+          !command ||
+          !this.matchesCommand(fighter, commandId, attackButtonFrame)
+        ) {
+          continue;
+        }
 
         // 優先度、次に入力列の長さで比較する。同値ならCSVの先行行を維持して決定論性を保つ。
         const isHigherPriority = command.priority > selectedPriority;
@@ -1036,7 +1051,7 @@ export class MatchSimulation implements DeterministicSimulation {
       return;
     }
 
-    // 投げは通常技のリーチではなく、押し込み判定の接触中だけ成立させる。
+    // 投げも通常技と同じく、moves.csvのrange_x/range_y内でのみ成立させる。
     if (move.button === InputButton.Throw) {
       this.resolveThrow(attacker, defender, move, defenderInput);
       return;
@@ -1063,8 +1078,8 @@ export class MatchSimulation implements DeterministicSimulation {
     move: MoveDefinition,
     defenderInput: FrameInput,
   ): void {
-    // 相手を押せない距離・高さでは投げを空振りにする。
-    if (!this.isPushableForThrow(attacker, defender)) {
+    // 投げ間合いは、通常技と同じくmoves.csvのrange_x/range_yで決める。
+    if (!this.isMeleeInRange(attacker, defender, move)) {
       attacker.attackConnected = true;
       return;
     }
@@ -1094,25 +1109,8 @@ export class MatchSimulation implements DeterministicSimulation {
       return;
     }
 
-    // ニュートラル・前入力投げは、投げた側だけを全通常技の外へ退かせる。
-    attacker.x = this.clampToStage(
-      defender.x - attacker.facing * THROW_SELF_KNOCKBACK_DISTANCE,
-    );
-    attacker.velocityX =
-      -attacker.facing * Math.trunc(THROW_TECH_KNOCKBACK_SPEED / 2);
-  }
-
-  /** 相手との押し込み判定が重なり、投げられる高さにいるかを調べる。 */
-  private isPushableForThrow(
-    attacker: FighterState,
-    defender: FighterState,
-  ): boolean {
-    if (Math.abs(attacker.y - defender.y) >= PASS_THROUGH_HEIGHT) return false;
-    const pushDistance =
-      this.hurtboxHalfWidth(attacker) +
-      this.hurtboxHalfWidth(defender) +
-      PUSHBOX_PADDING * 2;
-    return Math.abs(attacker.x - defender.x) <= pushDistance;
+    // ニュートラル・前入力投げは、applyHitがknockback_x / knockback_yを相手へ適用する。
+    // 投げ側を後退させる固定処理は使わず、間合いと吹き飛びをCSVへ集約する。
   }
 
   /**
@@ -1269,7 +1267,10 @@ export class MatchSimulation implements DeterministicSimulation {
       attackLevel: move.attackLevel,
       knockbackX: move.knockbackX,
       knockbackY: move.knockbackY,
+      guardKnockbackX: move.guardKnockbackX,
+      guardSelfKnockbackX: move.guardSelfKnockbackX,
       hitstun: move.hitstun,
+      guardStun: move.guardStun,
     });
   }
 
@@ -1320,7 +1321,10 @@ export class MatchSimulation implements DeterministicSimulation {
       | "attackLevel"
       | "knockbackX"
       | "knockbackY"
+      | "guardKnockbackX"
+      | "guardSelfKnockbackX"
       | "hitstun"
+      | "guardStun"
     >,
     defenderInput: FrameInput,
     /** 弱・強の命中なら、キャンセル成否までノックバックを保留する。 */
@@ -1387,7 +1391,8 @@ export class MatchSimulation implements DeterministicSimulation {
       defender.health = defender.character.maxHealth;
     }
     const velocityX = defending
-      ? attacker.facing * Math.trunc((attack.knockbackX * POSITION_SCALE) / 180)
+      ? attacker.facing *
+        Math.trunc((attack.guardKnockbackX * POSITION_SCALE) / 60)
       : attacker.facing * Math.trunc((attack.knockbackX * POSITION_SCALE) / 60);
     const velocityY = defending
       ? 0
@@ -1410,9 +1415,13 @@ export class MatchSimulation implements DeterministicSimulation {
       defender.velocityY = velocityY;
     }
     defender.stun = defending ? 0 : attack.hitstun;
-    defender.guardStun = defending
-      ? Math.max(1, Math.trunc(attack.hitstun / 2))
-      : 0;
+    defender.guardStun = defending ? attack.guardStun : 0;
+    if (defending) {
+      // ガードされた攻撃側も、CSV指定量だけ後方へ反動させて間合いを調整する。
+      attacker.velocityX =
+        -attacker.facing *
+        Math.trunc((attack.guardSelfKnockbackX * POSITION_SCALE) / 60);
+    }
     defender.guardStance = defending ? guardStance : null;
     defender.action = defending
       ? guardStance === "crouching"
@@ -1497,8 +1506,11 @@ export class MatchSimulation implements DeterministicSimulation {
   }
 
   private recordInput(fighter: FighterState, buttons: number): void {
-    /** commands.csv の最大猶予フレームに合わせ、方向入力履歴を保持する。 */
-    fighter.inputHistory.push(buttons);
+    /**
+     * commands.csv の猶予・溜め時間に合わせ、方向入力履歴を保持する。
+     * 技の演出・硬直中にもこの処理は通るため、溜め入力を途中から仕込める。
+     */
+    fighter.inputHistory.push({ buttons, facing: fighter.facing });
     if (fighter.inputHistory.length > this.inputHistoryLimit) {
       fighter.inputHistory.shift();
     }
@@ -1526,6 +1538,28 @@ export class MatchSimulation implements DeterministicSimulation {
     );
   }
 
+  /**
+   * 先行入力として保持中の攻撃ボタンが、実際に押された入力履歴上の位置を返す。
+   * 技の演出中に押したコマンド技も、ボタンを押したフレームを基準に照合する。
+   */
+  private bufferedActionInputFrame(
+    fighter: FighterState,
+    button: InputButton,
+  ): number | null {
+    for (
+      let index = fighter.bufferedActionHistory.length - 1;
+      index >= 0;
+      index -= 1
+    ) {
+      if ((fighter.bufferedActionHistory[index] & button) === 0) continue;
+
+      const inputAge = fighter.bufferedActionHistory.length - 1 - index;
+      const inputFrame = fighter.inputHistory.length - 1 - inputAge;
+      return inputFrame >= 0 ? inputFrame : null;
+    }
+    return null;
+  }
+
   /** 実行済みのボタンを先行入力履歴の全フレームから取り除く。 */
   private consumeBufferedActions(fighter: FighterState, buttons: number): void {
     for (
@@ -1538,16 +1572,29 @@ export class MatchSimulation implements DeterministicSimulation {
   }
 
   /**
-   * command_idが指す方向入力列を、現在の向きを基準にして照合する。
-   * 最後の方向入力を離した後も、固定猶予内なら技ボタンによる発動を受け付ける。
+   * command_idが指す方向入力列を、各入力フレーム時点の向きを基準にして照合する。
+   * 技の演出中に先行入力された場合も、実際に技ボタンを押したフレームを基準にする。
    */
-  private matchesCommand(fighter: FighterState, commandId: string): boolean {
+  private matchesCommand(
+    fighter: FighterState,
+    commandId: string,
+    attackButtonFrame: number,
+  ): boolean {
     const command = this.commandsById.get(commandId);
     const history = fighter.inputHistory;
-    if (!command || history.length === 0) return false;
+    if (
+      !command ||
+      attackButtonFrame < 0 ||
+      attackButtonFrame >= history.length
+    ) {
+      return false;
+    }
+    if (command.chargeFrames > 0) {
+      return this.matchesChargeCommand(history, command, attackButtonFrame);
+    }
 
     /** 技ボタンを押した現在フレームを基準に、コマンド全体の制限時間を計算する。 */
-    const latestInputFrame = history.length - 1;
+    const latestInputFrame = attackButtonFrame;
     const earliestEndFrame = Math.max(
       0,
       latestInputFrame - COMMAND_BUTTON_GRACE_FRAMES,
@@ -1561,7 +1608,6 @@ export class MatchSimulation implements DeterministicSimulation {
       if (
         !this.matchesCommandDirection(
           history[endFrame],
-          fighter.facing,
           command.sequence[sequenceIndex],
         )
       ) {
@@ -1571,7 +1617,7 @@ export class MatchSimulation implements DeterministicSimulation {
 
       /**
        * 最後の方向入力ではなく技ボタン時点を起点にすることで、
-       * 2F猶予を使っても commands.csv の max_frames を超えて受け付けない。
+       * 6F猶予を使っても commands.csv の max_frames を超えて受け付けない。
        */
       const earliestFrame = Math.max(0, latestInputFrame - command.maxFrames);
       for (
@@ -1582,7 +1628,6 @@ export class MatchSimulation implements DeterministicSimulation {
         if (
           this.matchesCommandDirection(
             history[index],
-            fighter.facing,
             command.sequence[sequenceIndex],
           )
         ) {
@@ -1594,12 +1639,103 @@ export class MatchSimulation implements DeterministicSimulation {
     return false;
   }
 
+  /**
+   * 先頭の4を後ろ入力として照合する溜めコマンドです。
+   * 残りの方向列（例: 4>6なら6）を満たす直前の後ろ入力を溜め時間に数えます。
+   * 前方向を含まない入力途切れは、合計4Fまで溜めの継続として許容します。
+   */
+  private matchesChargeCommand(
+    history: readonly CommandInputHistoryEntry[],
+    command: CommandDefinition,
+    attackButtonFrame: number,
+  ): boolean {
+    const latestInputFrame = attackButtonFrame;
+    const earliestEndFrame = Math.max(
+      0,
+      latestInputFrame - COMMAND_BUTTON_GRACE_FRAMES,
+    );
+    /**
+     * max_framesは溜め開始からではなく、攻撃ボタンを押した時点から後続入力を逆算する。
+     * これにより後ろ入力を長く維持しても、charge_framesを満たした状態を失わない。
+     */
+    const earliestReleaseFrame = Math.max(
+      0,
+      latestInputFrame - command.maxFrames,
+    );
+    const releaseSequence = command.sequence.slice(1);
+
+    for (
+      let endFrame = latestInputFrame;
+      endFrame >= earliestEndFrame;
+      endFrame -= 1
+    ) {
+      let releaseSequenceIndex = releaseSequence.length - 1;
+      if (
+        !this.matchesCommandDirection(
+          history[endFrame],
+          releaseSequence[releaseSequenceIndex],
+        )
+      ) {
+        continue;
+      }
+
+      let releaseStartFrame = endFrame;
+      releaseSequenceIndex -= 1;
+      for (
+        let index = endFrame - 1;
+        index >= earliestReleaseFrame && releaseSequenceIndex >= 0;
+        index -= 1
+      ) {
+        if (
+          this.matchesCommandDirection(
+            history[index],
+            releaseSequence[releaseSequenceIndex],
+          )
+        ) {
+          releaseStartFrame = index;
+          releaseSequenceIndex -= 1;
+        }
+      }
+      if (releaseSequenceIndex >= 0) continue;
+
+      const chargeStartFrame = releaseStartFrame - command.chargeFrames;
+      const chargeEndFrame = releaseStartFrame - 1;
+      // 溜め開始はmax_framesの範囲外でもよく、後ろ入力の途切れは合計4Fまで許容する。
+      if (chargeStartFrame < 0) continue;
+
+      let gapFrames = 0;
+      let chargeComplete = true;
+      /**
+       * charge_frames分の判定区間では、ニュートラル・上下入力などの
+       * 前方向を含まない途切れを合計4Fまで後ろ入力として扱う。
+       */
+      for (let index = chargeStartFrame; index <= chargeEndFrame; index += 1) {
+        const chargeInput = history[index];
+        if (this.isBackChargeInput(chargeInput)) continue;
+
+        // 前方向（左右同時押しを含む）は、溜めを即時に途切れさせる。
+        if (this.hasForwardChargeInput(chargeInput)) {
+          chargeComplete = false;
+          break;
+        }
+
+        gapFrames += 1;
+        if (gapFrames > CHARGE_INPUT_GAP_FRAMES) {
+          chargeComplete = false;
+          break;
+        }
+      }
+      if (chargeComplete) return true;
+    }
+    return false;
+  }
+
   /** commands.csv のテンキー方向と、実際の十字入力が一致するかを返す。 */
   private matchesCommandDirection(
-    buttons: number,
-    facing: -1 | 1,
+    input: CommandInputHistoryEntry,
     direction: CommandDirection,
   ): boolean {
+    const { buttons, facing } = input;
     const forward = this.isDirectionPressed(buttons, facing);
     const back = this.isDirectionPressed(buttons, facing === 1 ? -1 : 1);
     const up = (buttons & InputButton.Up) !== 0;
@@ -1614,6 +1750,21 @@ export class MatchSimulation implements DeterministicSimulation {
     if (direction === "7") return up && back && !forward && !down;
     if (direction === "3") return down && forward && !back && !up;
     return down && back && !forward && !up;
+  }
+
+  /** 溜め中は後ろ・斜め後ろを連続入力として許可し、前入力の同時押しは無効にする。 */
+  private isBackChargeInput(input: CommandInputHistoryEntry): boolean {
+    const forward = this.isDirectionPressed(input.buttons, input.facing);
+    const back = this.isDirectionPressed(
+      input.buttons,
+      input.facing === 1 ? -1 : 1,
+    );
+    return back && !forward;
+  }
+
+  /** 溜め中の前方向入力（左右同時押しを含む）かを返す。 */
+  private hasForwardChargeInput(input: CommandInputHistoryEntry): boolean {
+    return this.isDirectionPressed(input.buttons, input.facing);
   }
 
   /** 指定した向きに対応する左右入力が押されているかを返す。 */

@@ -56,10 +56,19 @@ export interface CommandDefinition {
   id: string;
   /** 最後の攻撃ボタンを除く、方向入力の順序。 */
   sequence: readonly CommandDirection[];
-  /** 最初の方向入力から攻撃ボタンまでに許容する固定フレーム数。 */
+  /**
+   * 通常コマンドでは最初の方向入力から、溜めコマンドでは後続方向入力から
+   * 攻撃ボタンまでに許容する固定フレーム数。
+   */
   maxFrames: number;
   /** 同じ攻撃ボタンで複数コマンドが成立した時に優先する値。大きいほど優先。 */
   priority: number;
+  /**
+   * 先頭の後ろ入力を維持する必要があるフレーム数。
+   * 前方向を含まない入力途切れは、ゲーム側で合計4Fまで許容する。
+   * 0は通常コマンド、1以上は溜めコマンドとして扱う。
+   */
+  chargeFrames: number;
 }
 
 export interface MoveDefinition {
@@ -93,7 +102,13 @@ export interface MoveDefinition {
   selfMoveY: number;
   knockbackX: number;
   knockbackY: number;
+  /** ガードした相手を後方へ押す横方向の速度。 */
+  guardKnockbackX: number;
+  /** ガードされた攻撃側を後方へ押す横方向の速度。 */
+  guardSelfKnockbackX: number;
   hitstun: number;
+  /** ガード成功側が入力を受け付けないフレーム数。0なら硬直なし。 */
+  guardStun: number;
   animation: FighterAction;
   /** CSVの use_state から読み込む、技を実行できる状態。 */
   useState: MoveUseState;

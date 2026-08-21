@@ -213,6 +213,34 @@
         </div>
       </div>
     </section>
+
+    <section
+      id="match-result-menu"
+      class="modal-layer is-hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="match-result-title"
+      aria-hidden="true"
+    >
+      <div class="pause-menu-card match-result-menu-card">
+        <p class="pause-menu-kicker">MATCH RESULT</p>
+        <h1 id="match-result-title">試合終了</h1>
+        <p id="match-result-status" class="match-result-status"></p>
+        <div class="pause-menu-actions">
+          <button id="match-rematch" type="button">再試合</button>
+          <button id="match-character-select" type="button">
+            キャラクター選択
+          </button>
+          <button
+            id="match-top"
+            type="button"
+            class="pause-top-button"
+          >
+            Top画面へ
+          </button>
+        </div>
+      </div>
+    </section>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

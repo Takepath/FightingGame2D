@@ -510,6 +510,19 @@ input {
   box-shadow: 0 18px 70px #000c;
 }
 
+/* 試合終了時は金色の枠で、通常の一時停止メニューと状態を見分けやすくする。 */
+.match-result-menu-card {
+  border-color: #f7d04f;
+}
+
+.match-result-status {
+  min-height: 1.45em;
+  margin: -12px 0 18px;
+  color: #c7daeb;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
 /* キーコンフィグ表示時だけ、P1/P2を横並びにできる幅へ広げる。 */
 .pause-menu-card:has(#pause-menu-options:not(.is-hidden)) {
   width: min(720px, 100%);
