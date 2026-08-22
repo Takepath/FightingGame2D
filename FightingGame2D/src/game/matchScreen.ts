@@ -1,6 +1,7 @@
 import type { Ticker } from "pixi.js";
 import { Container, Graphics, Sprite, Text } from "pixi.js";
 import { Fireworks } from "fireworks-js";
+import { gameAssetUrl } from "./assets";
 import { CpuController, type CpuLevel } from "./cpu";
 import { FrameSynchronizer } from "./frameSynchronizer";
 import { FighterView } from "./fighterView";
@@ -48,13 +49,15 @@ import {
 } from "./types";
 
 // 60FPS固定シミュレーション用の更新間隔
-const FIXED_STEP_MS = 1000 / 60;
+const FIXED_STEP_MS = 1000 / FIGHTING_GAME_CONFIG.engine.fixedFps;
 
 // 1フレーム描画中に実行できるシミュレーション更新の最大回数
-const MAX_STEPS_PER_RENDER = 5;
+const MAX_STEPS_PER_RENDER =
+  FIGHTING_GAME_CONFIG.presentation.maxCatchUpStepsPerRender;
 
 /** トレーニング画面の左端へ表示する、最新入力から遡る履歴の最大件数。 */
-const MAX_TRAINING_INPUT_HISTORY = 8;
+const MAX_TRAINING_INPUT_HISTORY =
+  FIGHTING_GAME_CONFIG.presentation.trainingInputHistoryLimit;
 
 /** 同一入力をまとめて表示するための、ボタンと継続フレーム数。 */
 interface TrainingInputHistoryEntry {
@@ -63,24 +66,26 @@ interface TrainingInputHistoryEntry {
 }
 
 /** 入力履歴の継続時間として表示する最大フレーム数。 */
-const MAX_TRAINING_INPUT_ELAPSED_FRAMES = 99;
+const MAX_TRAINING_INPUT_ELAPSED_FRAMES =
+  FIGHTING_GAME_CONFIG.presentation.trainingInputElapsedFramesLimit;
 
 /** 試合勝者の決定時に打ち上げる花火の本数。 */
 /** 超必殺ゲージは100単位のバーと、右側の百の位で表示する。 */
 const SUPER_GAUGE_BAR_MAX = 100;
-const SUPER_GAUGE_BAR_WIDTH = 190;
+const SUPER_GAUGE_BAR_WIDTH =
+  FIGHTING_GAME_CONFIG.presentation.superGaugeBarWidth;
 
-const MATCH_RESULT_FIREWORKS = 3;
+const MATCH_RESULT_FIREWORKS =
+  FIGHTING_GAME_CONFIG.presentation.fireworks.count;
 
 /** 写真のような多色の大輪に見せるため、各打上げへ重ねる色の層。 */
-const MATCH_RESULT_FIREWORK_HUES = [
-  { min: 320, max: 350 },
-  { min: 270, max: 300 },
-  { min: 25, max: 48 },
-] as const;
+const MATCH_RESULT_FIREWORK_HUES =
+  FIGHTING_GAME_CONFIG.presentation.fireworks.hueLayers;
+const MATCH_RESULT_FIREWORK_APPEARANCE =
+  FIGHTING_GAME_CONFIG.presentation.fireworks;
 
 /** public配下に配置する、強い攻撃命中時の効果音ファイル。 */
-const HIT_STOP_SOUND_PATH = "data/sounds/slap-1.mp3";
+const HIT_STOP_SOUND_PATH = FIGHTING_GAME_CONFIG.presentation.hitStopSoundPath;
 
 /**
  * 試合終了モーダルから、メニュー画面へ戻るための遷移処理です。
@@ -126,6 +131,9 @@ export class MatchScreen extends Container {
 
   /** 飛び道具状態ごとに再利用するPNGスプライト。 */
   private readonly projectileSprites = new Map<ProjectileState, Sprite>();
+
+  /** 毎フレーム再利用し、消滅したPNG飛び道具だけを判別する作業用Set。 */
+  private readonly activeSpriteProjectiles = new Set<ProjectileState>();
 
   /** projectiles.csv の定義をIDで引ける描画用索引。 */
   private readonly projectileDefinitionsById = new Map<
@@ -331,8 +339,8 @@ export class MatchScreen extends Container {
   /** 前回描画時のヒットストップ残りフレーム。音の重複再生を防ぐ。 */
   private previousHitStopFrames = 0;
 
-  /** 前フレームに飛び道具Graphicsが存在したか。 */
-  private hadProjectiles = false;
+  /** 前フレームに円形飛び道具Graphicsが存在したか。 */
+  private hadCircleProjectiles = false;
 
   /** 経過時間蓄積 */
   private accumulatorMs = 0;
@@ -379,8 +387,14 @@ export class MatchScreen extends Container {
   /** 花火用Canvasを重ねる、操作を受け付けない画面全体のレイヤー。 */
   private readonly fireworksLayer = document.getElementById("fireworks-layer")!;
 
-  /** 3本の発射位置と多色の層を個別に制御する、fireworks-jsの花火演出。 */
-  private readonly matchResultFireworks: readonly (readonly Fireworks[])[];
+  /** この対戦画面が所有するCanvasだけを確実に破棄するための子コンテナ。 */
+  private readonly fireworksHost = document.createElement("div");
+
+  /** 3地点・多色の打上げで共有し、全画面Canvasを1枚だけ使う花火演出。 */
+  private matchResultFireworks: Fireworks | null = null;
+
+  /** 花火終了後に全画面Canvasを解放するタイマー。 */
+  private fireworksCleanupTimer: number | null = null;
 
   /** 同じ試合決着で花火を重複発射しないための状態。 */
   private fireworksLaunchedForMatch = false;
@@ -426,39 +440,8 @@ export class MatchScreen extends Container {
     this.training = MatchScreen.training;
     this.cpuLevel = MatchScreen.cpuLevel;
     // 公開URLを使って、Viteのbase URL配下でも効果音を正しく取得する。
-    this.hitStopSound.src = this.gameAssetUrl(HIT_STOP_SOUND_PATH);
+    this.hitStopSound.src = gameAssetUrl(HIT_STOP_SOUND_PATH);
     this.hitStopSound.preload = "auto";
-    // トレーニングでは試合勝敗がないため、花火インスタンスを生成しない。
-    this.matchResultFireworks = this.training
-      ? []
-      : Array.from({ length: MATCH_RESULT_FIREWORKS }, () =>
-          MATCH_RESULT_FIREWORK_HUES.map(
-            (hue) =>
-              new Fireworks(this.fireworksLayer, {
-                autoresize: true,
-                mouse: { click: false, move: false, max: 1 },
-                sound: { enabled: false },
-                // 色層を重ねて、写真のようなピンク・紫・金の大輪を作る。
-                hue,
-                particles: 72,
-                explosion: 11,
-                brightness: { min: 66, max: 100 },
-                decay: { min: 0.008, max: 0.015 },
-                friction: 0.98,
-                gravity: 1,
-                flickering: 72,
-                opacity: 0.24,
-                traceLength: 9,
-                traceSpeed: 12,
-                lineWidth: {
-                  trace: { min: 2, max: 3 },
-                  explosion: { min: 1, max: 2 },
-                },
-                // launch(1)だけで発射し、自動発射を混在させない。
-                intensity: 0,
-              }),
-          ),
-        );
 
     // シミュレーション生成
     this.simulation = new MatchSimulation(
@@ -466,9 +449,15 @@ export class MatchScreen extends Container {
       data.moves,
       data.commands,
       this.training,
+      data.projectileDefinitions,
     );
-    this.cpu = this.cpuLevel === null ? null : new CpuController(this.cpuLevel);
-    this.trainingCpu = this.training ? new TrainingCpuController() : null;
+    this.cpu =
+      this.cpuLevel === null
+        ? null
+        : new CpuController(this.cpuLevel, data.moves, data.commands);
+    this.trainingCpu = this.training
+      ? new TrainingCpuController(data.moves, data.commands)
+      : null;
 
     // プレイヤー表示生成
     this.fighterViews = [
@@ -652,23 +641,6 @@ export class MatchScreen extends Container {
     this.resetMatchState();
   }
 
-  /**
-   * オンライン対戦終了
-   */
-  public stopOnline(): void {
-    this.online?.destroy();
-    this.online = null;
-    this.onlineClient = null;
-    this.onlinePlayer = null;
-    this.onlineMatchEpoch = 0;
-    this.pendingOnlineRematchEpoch = null;
-    this.removeMatchResultActionListener?.();
-    this.removeMatchResultActionListener = null;
-    this.removeRematchStartListener?.();
-    this.removeRematchStartListener = null;
-    this.resetMatchState();
-  }
-
   /** 再試合・オンライン再接続で共有する、試合状態と表示キャッシュの初期化処理。 */
   private resetMatchState(): void {
     this.synchronizer.reset();
@@ -693,10 +665,8 @@ export class MatchScreen extends Container {
     this.displayedSuperGauge[1] = -1;
     this.projectileArt.clear();
     this.clearProjectileSprites();
-    this.hadProjectiles = false;
-    this.matchResultFireworks.forEach((fireworksAtPoint) => {
-      fireworksAtPoint.forEach((fireworks) => fireworks.stop(true));
-    });
+    this.hadCircleProjectiles = false;
+    this.destroyMatchResultFireworks(false);
   }
 
   /**
@@ -704,16 +674,19 @@ export class MatchScreen extends Container {
    * 描画フレームとは独立して60FPSシミュレーションを実行
    */
   public update(time: Ticker): void {
+    // Home監視・キー割り当て・P1/P2入力で、同じGamepadスナップショットを共有する。
+    this.input.pollGamepads();
     // Home は Esc と同じ固定キャンセル。停止中も監視して再開操作を受け付ける。
     if (this.input.consumeGamepadHomePress()) this.handleCancelInput();
     this.captureGamepadBinding();
-    // 試合終了モーダル中のオンライン対戦だけは、遅れている相手が同じ終了フレームへ
-    // 到達できるよう、ニュートラルを含む入力同期を継続する。
-    if (this.paused && !(this.online && this.isMatchResultMenuOpen())) {
-      return;
-    }
+    // 一時停止・結果モーダル中は固定フレーム送信も止め、オンライン待機中の60Hz通信を避ける。
+    // 結果画面の選択通知はRoomClientのイベント通信なので、シミュレーション更新を必要としない。
+    if (this.paused) return;
 
-    this.accumulatorMs += Math.min(time.deltaMS, 250);
+    this.accumulatorMs += Math.min(
+      time.deltaMS,
+      FIGHTING_GAME_CONFIG.presentation.maxFrameDeltaMs,
+    );
 
     let executedSteps = 0;
 
@@ -804,9 +777,7 @@ export class MatchScreen extends Container {
     // 対戦画面を閉じる時は、再利用していた飛び道具PNGも確実に解放する。
     this.clearProjectileSprites();
     // 画面遷移時は残っている花火Canvasも停止・破棄する。
-    this.matchResultFireworks.forEach((fireworksAtPoint) => {
-      fireworksAtPoint.forEach((fireworks) => fireworks.stop(true));
-    });
+    this.destroyMatchResultFireworks(true);
     // 画面遷移後に効果音だけが残らないよう停止し、ブラウザー側の音声リソースを解放する。
     this.hitStopSound.pause();
     this.hitStopSound.removeAttribute("src");
@@ -1228,7 +1199,8 @@ export class MatchScreen extends Container {
         currentEntry.elapsedFrames < MAX_TRAINING_INPUT_ELAPSED_FRAMES
       ) {
         currentEntry.elapsedFrames += 1;
-        this.renderTrainingInputHistory();
+        // 継続中はフレーム文字だけを更新し、記号Textと背景の再生成を避ける。
+        this.renderTrainingInputHistoryFrames();
       }
       return;
     }
@@ -1253,13 +1225,7 @@ export class MatchScreen extends Container {
     const inputLines = this.trainingInputHistory.map((entry) =>
       this.formatTrainingInput(entry.buttons),
     );
-    const frameLines = this.trainingInputHistory.map(
-      (entry) => String(entry.elapsedFrames) + "F",
-    );
-    this.setTextIfChanged(
-      this.trainingInputHistoryFrameText,
-      frameLines.join("\n"),
-    );
+    this.renderTrainingInputHistoryFrames();
     this.setTextIfChanged(this.trainingInputHistoryText, inputLines.join("\n"));
 
     const panelHeight = Math.max(44, inputLines.length * 31 + 18);
@@ -1268,6 +1234,17 @@ export class MatchScreen extends Container {
       .roundRect(18, 116, 194, panelHeight, 8)
       .fill({ color: 0x071425, alpha: 0.8 })
       .stroke({ color: 0x4fc3dd, width: 1, alpha: 0.75 });
+  }
+
+  /** 同一入力の継続中に変化する、左側のフレーム数だけを更新する。 */
+  private renderTrainingInputHistoryFrames(): void {
+    const frameLines = this.trainingInputHistory.map(
+      (entry) => `${entry.elapsedFrames}F`,
+    );
+    this.setTextIfChanged(
+      this.trainingInputHistoryFrameText,
+      frameLines.join("\n"),
+    );
   }
 
   /** 入力ビットを、トレーニング表示用の方向記号と攻撃名へ整形する。 */
@@ -1840,9 +1817,52 @@ export class MatchScreen extends Container {
     void this.hitStopSound.play().catch(() => undefined);
   }
 
+  /** 勝敗決定時だけ花火Canvasを生成し、通常対戦中の全画面描画コストをなくす。 */
+  private createMatchResultFireworks(): void {
+    if (this.matchResultFireworks) return;
+    Object.assign(this.fireworksHost.style, {
+      position: "absolute",
+      inset: "0",
+      width: "100%",
+      height: "100%",
+      pointerEvents: "none",
+    });
+    this.fireworksLayer.appendChild(this.fireworksHost);
+    this.matchResultFireworks = new Fireworks(this.fireworksHost, {
+      autoresize: true,
+      mouse: { click: false, move: false, max: 1 },
+      sound: { enabled: false },
+      hue: MATCH_RESULT_FIREWORK_HUES[0] ?? { min: 0, max: 360 },
+      particles: MATCH_RESULT_FIREWORK_APPEARANCE.particles,
+      explosion: MATCH_RESULT_FIREWORK_APPEARANCE.explosion,
+      brightness: MATCH_RESULT_FIREWORK_APPEARANCE.brightness,
+      decay: MATCH_RESULT_FIREWORK_APPEARANCE.decay,
+      friction: MATCH_RESULT_FIREWORK_APPEARANCE.friction,
+      gravity: MATCH_RESULT_FIREWORK_APPEARANCE.gravity,
+      flickering: MATCH_RESULT_FIREWORK_APPEARANCE.flickering,
+      opacity: MATCH_RESULT_FIREWORK_APPEARANCE.opacity,
+      traceLength: MATCH_RESULT_FIREWORK_APPEARANCE.traceLength,
+      traceSpeed: MATCH_RESULT_FIREWORK_APPEARANCE.traceSpeed,
+      lineWidth: MATCH_RESULT_FIREWORK_APPEARANCE.lineWidth,
+      intensity: 0,
+    });
+  }
+
+  /** fireworks-jsの内部状態に依存せず、所有Canvasとタイマーを確実に解放する。 */
+  private destroyMatchResultFireworks(removeHost: boolean): void {
+    if (this.fireworksCleanupTimer !== null) {
+      window.clearTimeout(this.fireworksCleanupTimer);
+      this.fireworksCleanupTimer = null;
+    }
+    this.matchResultFireworks?.stop();
+    this.matchResultFireworks = null;
+    this.fireworksHost.replaceChildren();
+    if (removeHost) this.fireworksHost.remove();
+  }
+
   /** 2本先取で試合勝者が決定した瞬間だけ、下から中央へ3発の花火を打ち上げる。 */
   private playMatchResultFireworks(): void {
-    if (this.training || this.matchResultFireworks.length === 0) return;
+    if (this.training) return;
 
     if (this.simulation.matchWinner === null) {
       this.fireworksLaunchedForMatch = false;
@@ -1850,18 +1870,23 @@ export class MatchScreen extends Container {
     }
     if (this.fireworksLaunchedForMatch) return;
 
+    this.createMatchResultFireworks();
+
     const width = this.fireworksLayer.clientWidth || window.innerWidth;
     const height = this.fireworksLayer.clientHeight || window.innerHeight;
     const explosionY = Math.round(height / 2);
+    const fireworks = this.matchResultFireworks;
+    if (!fireworks) return;
 
-    this.matchResultFireworks.forEach((fireworksAtPoint, index) => {
+    for (let index = 0; index < MATCH_RESULT_FIREWORKS; index += 1) {
       // 25%・50%・75%の等間隔から垂直に打ち上げ、上下中央へ到達させる。
       const pointPercent = ((index + 1) / (MATCH_RESULT_FIREWORKS + 1)) * 100;
       const explosionX = Math.round((width * pointPercent) / 100);
 
-      // fireworks-jsの発射点と到達範囲を同じ座標へ固定して、斜めに飛ばないようにする。
-      fireworksAtPoint.forEach((fireworks) => {
+      // 1枚のCanvas上で色層ごとにオプションを写して打ち上げ、9枚の全画面Canvas生成を避ける。
+      for (const hue of MATCH_RESULT_FIREWORK_HUES) {
         fireworks.updateOptions({
+          hue,
           rocketsPoint: { min: pointPercent, max: pointPercent },
           boundaries: {
             x: explosionX,
@@ -1872,11 +1897,15 @@ export class MatchScreen extends Container {
           },
         });
         fireworks.launch(1);
-      });
-    });
+      }
+    }
 
     // 花火は演出専用であり、対戦の決定論的なゲーム状態には影響しない。
     this.fireworksLaunchedForMatch = true;
+    this.fireworksCleanupTimer = window.setTimeout(
+      () => this.destroyMatchResultFireworks(false),
+      FIGHTING_GAME_CONFIG.presentation.fireworks.cleanupDelayMs,
+    );
   }
 
   /** Textの内容が変化した時だけ更新し、文字テクスチャの再生成を避ける。 */
@@ -1889,15 +1918,22 @@ export class MatchScreen extends Container {
   private drawProjectiles(): void {
     const projectiles = this.simulation.projectiles;
     if (projectiles.length === 0) {
-      if (this.hadProjectiles) this.projectileArt.clear();
-      this.hadProjectiles = false;
+      if (this.hadCircleProjectiles) this.projectileArt.clear();
+      this.hadCircleProjectiles = false;
       this.clearProjectileSprites();
       return;
     }
 
-    this.hadProjectiles = true;
-    this.projectileArt.clear();
-    const activeSpriteProjectiles = new Set<ProjectileState>();
+    const hasCircleProjectiles = projectiles.some(
+      (projectile) =>
+        this.projectileDefinitionsById.get(projectile.visualId)?.renderType ===
+        "circle",
+    );
+    if (hasCircleProjectiles || this.hadCircleProjectiles) {
+      this.projectileArt.clear();
+    }
+    this.hadCircleProjectiles = hasCircleProjectiles;
+    this.activeSpriteProjectiles.clear();
     for (const projectile of projectiles) {
       const definition = this.projectileDefinitionsById.get(
         projectile.visualId,
@@ -1907,7 +1943,7 @@ export class MatchScreen extends Container {
       const x = projectile.x / 100;
       const y = projectile.y / 100;
       if (definition.renderType === "sprite") {
-        activeSpriteProjectiles.add(projectile);
+        this.activeSpriteProjectiles.add(projectile);
         const sprite = this.projectileSpriteFor(projectile, definition);
         sprite.position.set(x, y);
         continue;
@@ -1923,7 +1959,7 @@ export class MatchScreen extends Container {
         .circle(x, y, definition.coreRadius)
         .fill({ color: definition.coreColor });
     }
-    this.removeInactiveProjectileSprites(activeSpriteProjectiles);
+    this.removeInactiveProjectileSprites(this.activeSpriteProjectiles);
   }
 
   /** 指定飛び道具のPNGを一度だけ生成し、後続フレームでは再利用する。 */
@@ -1934,7 +1970,7 @@ export class MatchScreen extends Container {
     const existing = this.projectileSprites.get(projectile);
     if (existing) return existing;
 
-    const sprite = Sprite.from(this.gameAssetUrl(definition.asset));
+    const sprite = Sprite.from(gameAssetUrl(definition.asset));
     sprite.anchor.set(0.5);
     sprite.width = definition.width;
     sprite.height = definition.height;
@@ -1958,10 +1994,6 @@ export class MatchScreen extends Container {
   private clearProjectileSprites(): void {
     for (const sprite of this.projectileSprites.values()) sprite.destroy();
     this.projectileSprites.clear();
-  }
-
-  /** public配下のゲームアセットを、Viteの公開URLへ変換する。 */
-  private gameAssetUrl(path: string): string {
-    return `${import.meta.env.BASE_URL}${path.replace(/^\//, "")}`;
+    this.activeSpriteProjectiles.clear();
   }
 }

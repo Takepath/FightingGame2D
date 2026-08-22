@@ -1,6 +1,12 @@
 import { CpuController } from "./cpu";
+import { FIGHTING_GAME_CONFIG } from "./gameConfig";
 import { GROUND_Y, POSITION_SCALE, type FighterState } from "./simulation";
-import { type FrameInput, InputButton } from "./types";
+import {
+  type CommandDefinition,
+  type FrameInput,
+  InputButton,
+  type MoveDefinition,
+} from "./types";
 
 /** トレーニングCPUのガード行動。 */
 export type TrainingGuardMode = "none" | "standing" | "crouching" | "random";
@@ -38,9 +44,15 @@ export const DEFAULT_TRAINING_CPU_SETTINGS: TrainingCpuSettings = {
 
 type GuardStance = "standing" | "crouching";
 
-const RANDOM_MOVE_INTERVAL = 75;
-const RANDOM_JUMP_INTERVAL = 90;
-const ATTACK_INTERVAL = 42;
+const RANDOM_MOVE_INTERVAL =
+  FIGHTING_GAME_CONFIG.cpu.training.randomMoveInterval;
+const RANDOM_JUMP_INTERVAL =
+  FIGHTING_GAME_CONFIG.cpu.training.randomJumpInterval;
+const ALWAYS_JUMP_INTERVAL =
+  FIGHTING_GAME_CONFIG.cpu.training.alwaysJumpInterval;
+const RANDOM_JUMP_CHANCE_DIVISOR =
+  FIGHTING_GAME_CONFIG.cpu.training.randomJumpChanceDivisor;
+const ATTACK_INTERVAL = FIGHTING_GAME_CONFIG.cpu.training.attackInterval;
 
 /**
  * トレーニングモード用のP2入力を決定する。
@@ -57,18 +69,21 @@ export class TrainingCpuController {
   private randomGuardStance: GuardStance = "standing";
 
   /** ランダム攻撃時に、波動拳コマンドを含む CPU Lv3 の入力列を生成する。 */
-  private readonly levelThreeAttackCpu = new CpuController(3);
+  private readonly levelThreeAttackCpu: CpuController;
+
+  /** 通常CPUと同じCSV定義を受け取り、ランダム攻撃も追加技へ自動追従させる。 */
+  public constructor(
+    moves: readonly MoveDefinition[] = [],
+    commands: readonly CommandDefinition[] = [],
+  ) {
+    this.levelThreeAttackCpu = new CpuController(3, moves, commands);
+  }
 
   /** トレーニングCPUの行動設定を更新する。 */
   public setSettings(settings: TrainingCpuSettings): void {
     this.settings = { ...settings };
     // 設定変更後に途中までのコマンド入力を持ち越さない。
     this.levelThreeAttackCpu.reset();
-  }
-
-  /** 現在の行動設定を、画面表示用に複製して返す。 */
-  public getSettings(): TrainingCpuSettings {
-    return { ...this.settings };
   }
 
   /** 現在の対戦状態から、P2用の入力フレームを生成する。 */
@@ -87,6 +102,8 @@ export class TrainingCpuController {
       self.guardStun > 0 ||
       self.activeMoveId
     ) {
+      // 被弾・ガード・技開始で途切れたコマンド列を、行動可能後へ持ち越さない。
+      this.levelThreeAttackCpu.reset();
       return { buttons: 0 };
     }
 
@@ -113,10 +130,14 @@ export class TrainingCpuController {
         self,
         opponent,
       ).buttons;
-      const commandDirections =
-        InputButton.Left | InputButton.Right | InputButton.Down;
-      if ((attackButtons & commandDirections) !== 0) {
-        buttons &= ~commandDirections;
+      if (this.levelThreeAttackCpu.didSampleCommandFrame) {
+        // 斜め上やニュートラルを含むコマンドにも、移動・ジャンプ設定を混ぜない。
+        const allDirections =
+          InputButton.Left |
+          InputButton.Right |
+          InputButton.Up |
+          InputButton.Down;
+        buttons &= ~allDirections;
       }
       buttons |= attackButtons;
     } else {
@@ -169,12 +190,14 @@ export class TrainingCpuController {
   private jumpInput(frame: number, self: FighterState): number {
     if (self.y !== GROUND_Y * POSITION_SCALE || self.velocityY !== 0) return 0;
     if (this.settings.jump === "always") {
-      return frame % 12 === 0 ? InputButton.Up : 0;
+      return frame % ALWAYS_JUMP_INTERVAL === 0 ? InputButton.Up : 0;
     }
     if (
       this.settings.jump === "random" &&
       frame % RANDOM_JUMP_INTERVAL === 0 &&
-      this.randomValue(Math.floor(frame / RANDOM_JUMP_INTERVAL)) % 3 === 0
+      this.randomValue(Math.floor(frame / RANDOM_JUMP_INTERVAL)) %
+        RANDOM_JUMP_CHANCE_DIVISOR ===
+        0
     ) {
       return InputButton.Up;
     }

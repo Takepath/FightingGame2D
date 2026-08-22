@@ -7,11 +7,12 @@ Fighting Game 2D - data 配下 CSV設定項目一覧
 ■ 共通ルール
 
 - 文字コードは UTF-8 を使用してください。
-- 1行目は列名です。列の順序と列名は変更しないでください。
+- 1行目は列名です。列順は変更できますが、列名の変更・重複・必須列の削除はできません。
 - 値にカンマを含める場合は、値全体を半角の二重引用符（"）で囲みます。
 - ファイルの参照先は public からの相対パスです。例: data/projectiles/take.png
 - フレーム数はすべて固定60 FPS（1フレーム = 1/60秒）で扱います。
-- 数値を省略した場合は、項目ごとに定められた既定値になるか、0として扱われます。必須項目は省略しないでください。
+- 数値列は原則必須です。使用しない値も0を明記してください。projectiles.csv の任意列 hitbox_radius だけは省略でき、不正値はファイル名・行・列付きのエラーになります。
+- id、move_id、command_id、projectile_id は64文字以内の半角英数字・_・-だけを使用します。キャラクターidの all は共通技用の予約語なので使用できません。
 
 
 1. characters.csv
@@ -21,19 +22,19 @@ Fighting Game 2D - data 配下 CSV設定項目一覧
 character_idから参照されるため、既存のidを変更する場合は moves.csv も合わせて変更してください。
 
 列名                 内容
-id                   キャラクターを識別する一意のIDです。英数字とアンダースコアを推奨します。
+id                   キャラクターを識別する一意のIDです。64文字以内の半角英数字・_・-を使用し、予約語 all は指定できません。
 name                 対戦画面・選択画面に表示するキャラクター名です。
 render_type          描画方式です。stick はプログラム描画の棒人間、blender はBlenderアニメーションJSONを使用します。
 animation_asset      render_type=blender のときに読み込むアニメーションJSONのパスです。stickでは空欄にできます。
 icon_asset           キャラクター選択画面のPNGアイコンのパスです。空欄の場合は既定アイコンを使用します。
 primary_color        キャラクターの基本色です。#RRGGBB形式で指定します。カラー選択の「デフォルト」に使われます。
 accent_color         キャラクターの差し色です。#RRGGBB形式で指定します。カラー選択の「デフォルト」に使われます。
-max_health           最大体力です。HPバーおよびラウンド開始時の体力に使用する正の数値です。
+max_health           最大体力です。HPバーおよびラウンド開始時の体力に使用する1以上の整数です。
 walk_speed           前進時の移動速度です。単位はピクセル/秒です。後退速度はこの値の1/3になります。
 jump_velocity        ジャンプ開始時の上向き速度です。単位はピクセル/秒です。大きいほど高く跳びます。
-hurtbox_width        被攻撃判定の横幅です。単位はピクセルです。空欄または0は既定値52になります。
-hurtbox_top          被攻撃判定の上端です。足元（地面位置）から上方向の距離をピクセルで指定します。空欄または0は既定値150になります。
-hurtbox_bottom       被攻撃判定の下端です。足元（地面位置）から上方向の距離をピクセルで指定します。空欄または0は既定値24になります。
+hurtbox_width        被攻撃判定の横幅です。単位はピクセルで、0より大きい値を指定します。
+hurtbox_top          被攻撃判定の上端です。足元（地面位置）から上方向の距離をピクセルで指定し、0より大きい値にします。
+hurtbox_bottom       被攻撃判定の下端です。0以上かつ hurtbox_top より小さい値を指定します。
 
 記入例
 id,name,render_type,animation_asset,icon_asset,primary_color,accent_color,max_health,walk_speed,jump_velocity,hurtbox_width,hurtbox_top,hurtbox_bottom
@@ -93,7 +94,7 @@ guard_knockback_x    ガードした相手を後方へ押し出す横方向の�
 guard_self_knockback_x ガードされた攻撃側を後方へ押し出す横方向の強さです。0以上の数値を指定します。0で自分は後退しません。
 hitstun              ヒットした相手が行動できなくなるフレーム数です。30を超える非ガードヒットでは5フレームの演出停止が入ります。
 guard_stun           ガードした相手が行動できなくなるフレーム数です。0以上の整数を指定します。0ならガード硬直なしです。
-animation            技中に再生するアニメーション名です。idle、walk、jump、light、heavy、special、hit、block、ko を指定します。
+animation            技中に再生するアニメーション名です。idle、walk、jump、light、heavy、special、hit、block、crouchBlock、ko を指定します。
 attack_type          攻撃の種類です。melee は近接攻撃、projectile は飛び道具です。
 projectile_speed     attack_type=projectile の飛行速度です。単位はピクセル/秒です。meleeでは0にします。
 projectile_lifetime  attack_type=projectile の存続時間です。単位はフレームです。meleeでは0にします。
@@ -108,7 +109,7 @@ character_id,move_id,button,startup,active,recovery,invincible_frames,damage,spe
 sample,hadoken,special,13,7,25,0,500,10,15,false,0,0,0,0,0,300,0,100,80,15,8,special,projectile,720,110,ground,mid,hadoken_blue,hadoken,
 
 設定上の注意
-- command_id を持つ必殺技も、cancel_into に special が含まれる技からはコマンド入力なしでキャンセルできます。
+- command_id を持つ必殺技をキャンセルで出す場合も、対応する方向コマンドと攻撃ボタン入力が必要です。
 - 投げは密着時に使用します。相手も発生10フレーム中に投げ入力をすると投げ抜けになります。
 - コンボ中は、1・2ヒット目は100%、3ヒット目は80%、以降は70%から減衰し、最低10%の補正でダメージが計算されます。
 
@@ -122,8 +123,9 @@ sample,hadoken,special,13,7,25,0,500,10,15,false,0,0,0,0,0,300,0,100,80,15,8,spe
 id                   飛び道具を識別する一意のIDです。moves.csv の projectile_id に記入します。
 render_type          描画方式です。circle は3重円のプログラム描画、sprite はPNG画像を表示します。
 asset                render_type=sprite のPNG画像のパスです。circleでは空欄にします。
-width                spriteの表示幅です。単位はピクセルです。空欄または0は既定値44になります。circleでは使用しません。
-height               spriteの表示高です。単位はピクセルです。空欄または0は既定値44になります。circleでは使用しません。
+width                spriteの表示幅です。単位はピクセルで、spriteでは1以上を指定します。circleでは0を指定できます。
+height               spriteの表示高です。単位はピクセルで、spriteでは1以上を指定します。circleでは0を指定できます。
+hitbox_radius        任意列です。飛び道具の円形命中判定半径を見た目と独立して1以上のピクセル数で指定します。列または値を省略した旧CSVでは gameConfig.ts の projectileHitboxRadius（既定14）を使います。
 outer_radius         circleの外側の円の半径です。単位はピクセルです。spriteでは使用しません。
 middle_radius        circleの中間の円の半径です。単位はピクセルです。spriteでは使用しません。
 core_radius          circleの中心の円の半径です。単位はピクセルです。spriteでは使用しません。
@@ -132,12 +134,12 @@ middle_color         circleの中間の色です。#RRGGBB形式です。sprite�
 core_color           circleの中心の色です。#RRGGBB形式です。spriteでは使用しません。
 
 記入例（画像を使う飛び道具）
-id,render_type,asset,width,height,outer_radius,middle_radius,core_radius,outer_color,middle_color,core_color
-my_fireball,sprite,data/projectiles/my_fireball.png,96,64,0,0,0,#FFFFFF,#FFFFFF,#FFFFFF
+id,render_type,asset,width,height,hitbox_radius,outer_radius,middle_radius,core_radius,outer_color,middle_color,core_color
+my_fireball,sprite,data/projectiles/my_fireball.png,96,64,18,0,0,0,#FFFFFF,#FFFFFF,#FFFFFF
 
 記入例（3重円で描画する飛び道具）
-id,render_type,asset,width,height,outer_radius,middle_radius,core_radius,outer_color,middle_color,core_color
-my_orb,circle,,44,44,22,14,7,#4FD8FF,#72E7FF,#E8F8FF
+id,render_type,asset,width,height,hitbox_radius,outer_radius,middle_radius,core_radius,outer_color,middle_color,core_color
+my_orb,circle,,44,44,14,22,14,7,#4FD8FF,#72E7FF,#E8F8FF
 
 
 追加時の確認手順
@@ -145,5 +147,6 @@ my_orb,circle,,44,44,22,14,7,#4FD8FF,#72E7FF,#E8F8FF
 
 1. 参照先のキャラクター、コマンド、飛び道具を必要に応じて先にCSVへ追加します。
 2. moves.csvへ技を1行追加し、参照IDの綴りが一致していることを確認します。
-3. npm run build を実行してCSVの形式・参照IDに関するエラーがないことを確認します。
-4. ブラウザを再読み込みし、キャラクター選択と対戦中の表示・当たり判定を確認します。
+3. npm run build を実行してTypeScript・Lint・製品ビルドが成功することを確認します。
+4. npm run dev でブラウザを起動し、CSVの形式・参照IDエラーが出ないことを確認します。
+5. キャラクター選択と対戦中の表示・当たり判定を確認します。

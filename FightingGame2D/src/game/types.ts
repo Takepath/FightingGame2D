@@ -11,7 +11,7 @@ export const enum InputButton {
 }
 
 export interface FrameInput {
-  buttons: number;
+  readonly buttons: number;
 }
 
 export type PlayerId = 0 | 1;
@@ -133,6 +133,8 @@ export interface ProjectileDefinition {
   width: number;
   /** スプライト描画時の高さ。円形描画では使用しない。 */
   height: number;
+  /** 見た目と独立して設定する、命中判定の円半径。 */
+  hitboxRadius: number;
   /** 円形エフェクトの外側・中間・中心の半径。 */
   outerRadius: number;
   middleRadius: number;

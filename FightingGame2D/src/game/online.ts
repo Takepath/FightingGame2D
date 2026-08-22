@@ -4,7 +4,12 @@ import {
   type PassphraseRoomState,
 } from "../../modules/passphrase-room/client";
 import { COLOR_VARIANTS } from "./colors";
-import type { ColorVariant, FrameInput, PlayerId } from "./types";
+import {
+  type ColorVariant,
+  type FrameInput,
+  InputButton,
+  type PlayerId,
+} from "./types";
 
 /** 試合終了後に両プレイヤーで同期する画面遷移操作。 */
 export type MatchResultAction = "rematch" | "character-select" | "top";
@@ -25,8 +30,18 @@ type InputHandler = (
   buttons: number,
   matchEpoch: number,
 ) => void;
+/** 対戦画面の生成前に届いた、検証済み入力の一時保管形式。 */
+interface PendingInput {
+  readonly frame: number;
+  readonly buttons: number;
+  readonly matchEpoch: number;
+}
 /** キャラクター・カラー選択受信用コールバック型。 */
-type SelectionHandler = (characterId: string, color: ColorVariant) => void;
+type SelectionHandler = (
+  characterId: string,
+  color: ColorVariant,
+  dataFingerprint: string,
+) => void;
 /** 試合終了後の画面遷移操作受信用コールバック型。 */
 type MatchResultActionHandler = (
   action: MatchResultAction,
@@ -47,18 +62,26 @@ export interface OnlineInputDelayOptions {
   maxFrames: number;
   /** 安定後に遅延を1フレーム下げるまでの連続フレーム数。 */
   decreaseAfterStableFrames: number;
+  /** 改造クライアント由来の到達不能な未来入力を保持しない上限。 */
+  maxFutureFrameLead: number;
 }
-
-/** ngrokなどの中継経路でも先読みを確保しやすい既定値。 */
-const DEFAULT_INPUT_DELAY_OPTIONS: OnlineInputDelayOptions = {
-  initialFrames: 6,
-  minFrames: 3,
-  maxFrames: 15,
-  decreaseAfterStableFrames: 240,
-};
 
 /** 初期バッファに使う、両プレイヤー共通のニュートラル入力。 */
 const NEUTRAL_INPUT: FrameInput = { buttons: 0 };
+
+/** 通信入力で受け付ける、ゲーム実装済みのボタンビット。 */
+const VALID_INPUT_BUTTON_MASK =
+  InputButton.Left |
+  InputButton.Right |
+  InputButton.Up |
+  InputButton.Down |
+  InputButton.Light |
+  InputButton.Heavy |
+  InputButton.Special |
+  InputButton.Throw;
+
+/** VS演出の終了時差を吸収しつつ、購読前入力でメモリを圧迫させない保持上限。 */
+const MAX_PENDING_INPUTS = 512;
 
 /** 汎用モジュール上で格闘ゲームが使うイベント名。 */
 const GAME_ROOM_EVENT = {
@@ -106,6 +129,8 @@ export class RoomClient {
   private readonly statusHandlers = new Set<StatusHandler>();
   private readonly readyHandlers = new Set<ReadyHandler>();
   private readonly inputHandlers = new Set<InputHandler>();
+  /** MatchScreenが購読を作る前に到着した入力。世代・フレーム単位で重複をまとめる。 */
+  private readonly pendingInputs = new Map<string, PendingInput>();
   private readonly selectionHandlers = new Set<SelectionHandler>();
   private readonly matchResultActionHandlers =
     new Set<MatchResultActionHandler>();
@@ -137,6 +162,7 @@ export class RoomClient {
 
   /** 合言葉ルームの作成または参加を開始する。 */
   public connect(mode: PassphraseRoomMode, phrase: string): void {
+    this.pendingInputs.clear();
     this.room.connect(mode, phrase);
   }
 
@@ -150,8 +176,16 @@ export class RoomClient {
   }
 
   /** キャラクター選択で決定したIDとカラーを相手へ送る。 */
-  public sendSelection(characterId: string, color: ColorVariant): void {
-    this.room.sendEvent(GAME_ROOM_EVENT.selection, { characterId, color });
+  public sendSelection(
+    characterId: string,
+    color: ColorVariant,
+    dataFingerprint: string,
+  ): void {
+    this.room.sendEvent(GAME_ROOM_EVENT.selection, {
+      characterId,
+      color,
+      dataFingerprint,
+    });
   }
 
   /** 試合終了モーダルで選んだ次の画面への操作を相手へ送る。 */
@@ -188,6 +222,15 @@ export class RoomClient {
   /** 相手のフレーム入力受信処理を登録する。 */
   public onInput(handler: InputHandler): () => void {
     this.inputHandlers.add(handler);
+    // 先にVS演出を終えた相手の入力を、最初の同期フレームから順に引き渡す。
+    const pending = [...this.pendingInputs.values()].sort(
+      (left, right) =>
+        left.matchEpoch - right.matchEpoch || left.frame - right.frame,
+    );
+    this.pendingInputs.clear();
+    for (const input of pending) {
+      handler(input.frame, input.buttons, input.matchEpoch);
+    }
     return () => this.inputHandlers.delete(handler);
   }
 
@@ -221,6 +264,7 @@ export class RoomClient {
 
   /** 通信を明示的に閉じる。 */
   public close(): void {
+    this.pendingInputs.clear();
     this.room.close();
   }
 
@@ -240,10 +284,12 @@ export class RoomClient {
       this.status(`ルーム接続完了: Player ${player + 1}`);
       this.readyHandlers.forEach((handler) => handler(this));
     } else if (state.type === "opponent_left") {
+      this.pendingInputs.clear();
       this.status("対戦相手が退出しました。新しい参加者を待てます。");
 
       this.opponentLeftHandlers.forEach((handler) => handler());
     } else if (state.type === "closed") {
+      this.pendingInputs.clear();
       this.status("接続が切断されました。");
       this.closeHandlers.forEach((handler) => handler());
     } else if (state.type === "error") {
@@ -261,17 +307,31 @@ export class RoomClient {
       typeof frame !== "number" ||
       typeof buttons !== "number" ||
       typeof matchEpoch !== "number" ||
-      !Number.isInteger(frame) ||
+      !Number.isSafeInteger(frame) ||
       !Number.isInteger(buttons) ||
-      !Number.isInteger(matchEpoch) ||
+      !Number.isSafeInteger(matchEpoch) ||
       frame < 0 ||
+      buttons < 0 ||
+      (buttons & ~VALID_INPUT_BUTTON_MASK) !== 0 ||
       matchEpoch < 0
     ) {
       return;
     }
-    this.inputHandlers.forEach((handler) =>
-      handler(frame, buttons, matchEpoch),
-    );
+    if (this.inputHandlers.size > 0) {
+      this.inputHandlers.forEach((handler) =>
+        handler(frame, buttons, matchEpoch),
+      );
+      return;
+    }
+
+    // MenuFlowのVSタイマー終了前なら入力を捨てず、後続のOnlineFrameBridgeへ渡す。
+    const key = `${matchEpoch}:${frame}`;
+    if (
+      this.pendingInputs.has(key) ||
+      this.pendingInputs.size < MAX_PENDING_INPUTS
+    ) {
+      this.pendingInputs.set(key, { frame, buttons, matchEpoch });
+    }
   }
 
   /** 任意イベントからキャラクターIDとカラーIDを取り出す。 */
@@ -279,16 +339,21 @@ export class RoomClient {
     if (!isRecord(payload)) return;
     const characterId = payload.characterId;
     const color = payload.color;
+    const dataFingerprint =
+      typeof payload.dataFingerprint === "string"
+        ? payload.dataFingerprint
+        : "";
     if (
       typeof characterId !== "string" ||
       characterId.length > 64 ||
       typeof color !== "string" ||
-      !COLOR_VARIANT_IDS.has(color as ColorVariant)
+      !COLOR_VARIANT_IDS.has(color as ColorVariant) ||
+      (dataFingerprint !== "" && !/^[0-9a-f]{16}$/.test(dataFingerprint))
     ) {
       return;
     }
     this.selectionHandlers.forEach((handler) =>
-      handler(characterId, color as ColorVariant),
+      handler(characterId, color as ColorVariant, dataFingerprint),
     );
   }
 
@@ -366,46 +431,32 @@ export class OnlineFrameBridge {
   // RoomClientから相手入力通知を受け取る
   public constructor(
     private readonly client: RoomClient,
-    options: Partial<OnlineInputDelayOptions> = {},
+    options: OnlineInputDelayOptions,
     /** 再試合ごとに切り替える試合世代。古い試合の遅延入力を混在させない。 */
     private readonly matchEpoch = 0,
   ) {
-    const minFrames = this.validFrameOption(
-      options.minFrames,
-      DEFAULT_INPUT_DELAY_OPTIONS.minFrames,
-    );
-    const maxFrames = Math.max(
-      minFrames,
-      this.validFrameOption(
-        options.maxFrames,
-        DEFAULT_INPUT_DELAY_OPTIONS.maxFrames,
-      ),
-    );
-    const initialFrames = Math.min(
-      maxFrames,
-      Math.max(
-        minFrames,
-        this.validFrameOption(
-          options.initialFrames,
-          DEFAULT_INPUT_DELAY_OPTIONS.initialFrames,
-        ),
-      ),
-    );
-    this.delayOptions = {
-      initialFrames,
-      minFrames,
-      maxFrames,
-      decreaseAfterStableFrames: this.validFrameOption(
-        options.decreaseAfterStableFrames,
-        DEFAULT_INPUT_DELAY_OPTIONS.decreaseAfterStableFrames,
-      ),
-    };
-    this.inputDelayFrames = initialFrames;
-    this.highestLocalInputFrame = initialFrames - 1;
-    this.highestRemoteInputFrame = initialFrames - 1;
+    // 数値の既定値はgameConfig.tsだけで管理し、ここでは受領値の境界を防御する。
+    if (
+      !Number.isInteger(options.minFrames) ||
+      !Number.isInteger(options.initialFrames) ||
+      !Number.isInteger(options.maxFrames) ||
+      !Number.isInteger(options.decreaseAfterStableFrames) ||
+      !Number.isInteger(options.maxFutureFrameLead) ||
+      options.minFrames < 1 ||
+      options.initialFrames < options.minFrames ||
+      options.maxFrames < options.initialFrames ||
+      options.decreaseAfterStableFrames < 1 ||
+      options.maxFutureFrameLead < options.maxFrames
+    ) {
+      throw new Error("オンライン入力遅延設定が不正です");
+    }
+    this.delayOptions = { ...options };
+    this.inputDelayFrames = options.initialFrames;
+    this.highestLocalInputFrame = options.initialFrames - 1;
+    this.highestRemoteInputFrame = options.initialFrames - 1;
 
     // 両者が同じ初期ニュートラル区間を使うことで、開始直後の通信待ちを避ける。
-    for (let frame = 0; frame < initialFrames; frame += 1) {
+    for (let frame = 0; frame < options.initialFrames; frame += 1) {
       this.localInputs.set(frame, { ...NEUTRAL_INPUT });
       this.remoteInputs.set(frame, { ...NEUTRAL_INPUT });
     }
@@ -415,6 +466,12 @@ export class OnlineFrameBridge {
         // 再試合直前に送られた旧世代の入力は、新しいフレーム0へ混ぜない。
         if (receivedMatchEpoch !== this.matchEpoch) return;
         if (frame <= this.lastConsumedFrame) return;
+        if (
+          frame >
+          this.lastConsumedFrame + this.delayOptions.maxFutureFrameLead
+        ) {
+          return;
+        }
         this.remoteInputs.set(frame, { buttons });
         this.highestRemoteInputFrame = Math.max(
           this.highestRemoteInputFrame,
@@ -525,15 +582,5 @@ export class OnlineFrameBridge {
       if (frame > highest) highest = frame;
     }
     this.highestRemoteInputFrame = highest;
-  }
-
-  /** 正の整数フレーム設定だけを採用し、不正値は既定値へ戻す。 */
-  private validFrameOption(
-    value: number | undefined,
-    fallback: number,
-  ): number {
-    return typeof value === "number" && Number.isInteger(value) && value > 0
-      ? value
-      : fallback;
   }
 }

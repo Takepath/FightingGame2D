@@ -1,5 +1,7 @@
 import { Container, Graphics, Sprite, Text, Texture } from "pixi.js";
 
+import { gameAssetUrl } from "./assets";
+import { FIGHTING_GAME_CONFIG } from "./gameConfig";
 import { POSITION_SCALE, type FighterState } from "./simulation";
 import type {
   BlenderAnimationData,
@@ -11,6 +13,8 @@ import type {
 interface SpriteColorAnalysis {
   readonly colorMask: HTMLCanvasElement;
   readonly whiteOutlineMask: HTMLCanvasElement;
+  /** 縮小マスクを元画像と同じ表示寸法へ戻す倍率。 */
+  readonly displayScale: number;
 }
 
 /** 同じPNGをP1・P2で重複解析しないための非同期解析キャッシュ。 */
@@ -39,11 +43,17 @@ async function analyzeSpriteColors(
     if (!response.ok) return null;
     const bitmap = await createImageBitmap(await response.blob());
     try {
+      // 色替え用Canvasは長辺上限まで縮小し、高解像度PNGによる常駐メモリを抑える。
+      const displayScale = Math.max(
+        1,
+        Math.max(bitmap.width, bitmap.height) /
+          FIGHTING_GAME_CONFIG.presentation.spriteColorMaskMaxDimension,
+      );
       const source = document.createElement("canvas");
-      source.width = bitmap.width;
-      source.height = bitmap.height;
+      source.width = Math.max(1, Math.round(bitmap.width / displayScale));
+      source.height = Math.max(1, Math.round(bitmap.height / displayScale));
       const sourceContext = canvasContext(source);
-      sourceContext.drawImage(bitmap, 0, 0);
+      sourceContext.drawImage(bitmap, 0, 0, source.width, source.height);
 
       const sourcePixels = sourceContext.getImageData(
         0,
@@ -104,18 +114,22 @@ async function analyzeSpriteColors(
       whiteOutlineMask.width = source.width;
       whiteOutlineMask.height = source.height;
       const outlineContext = canvasContext(whiteOutlineMask);
+      const outlinePixels = Math.max(
+        1,
+        Math.round(BLACK_OUTLINE_SOURCE_PIXELS / displayScale),
+      );
       for (let step = 0; step < 16; step += 1) {
         const angle = (Math.PI * 2 * step) / 16;
         outlineContext.drawImage(
           silhouette,
-          Math.round(Math.cos(angle) * BLACK_OUTLINE_SOURCE_PIXELS),
-          Math.round(Math.sin(angle) * BLACK_OUTLINE_SOURCE_PIXELS),
+          Math.round(Math.cos(angle) * outlinePixels),
+          Math.round(Math.sin(angle) * outlinePixels),
         );
       }
       outlineContext.globalCompositeOperation = "destination-out";
       outlineContext.drawImage(silhouette, 0, 0);
 
-      return { colorMask, whiteOutlineMask };
+      return { colorMask, whiteOutlineMask, displayScale };
     } finally {
       bitmap.close();
     }
@@ -131,10 +145,23 @@ function spriteColorAnalysisFor(
 ): Promise<SpriteColorAnalysis | null> {
   let analysis = spriteColorAnalysisCache.get(assetUrl);
   if (!analysis) {
-    analysis = analyzeSpriteColors(assetUrl);
+    analysis = analyzeSpriteColors(assetUrl).then((result) => {
+      // 一時的な通信・デコード失敗は固定キャッシュせず、次回選択で再試行可能にする。
+      if (!result) spriteColorAnalysisCache.delete(assetUrl);
+      return result;
+    });
     spriteColorAnalysisCache.set(assetUrl, analysis);
   }
   return analysis;
+}
+
+/** VS画面中に色替えマスクを先行生成し、対戦開始後の色表示遅延を避ける。 */
+export async function preloadSpriteColorAnalysis(
+  animation: BlenderAnimationData | undefined,
+): Promise<void> {
+  const asset = animation?.sprite?.asset;
+  if (!asset) return;
+  await spriteColorAnalysisFor(gameAssetUrl(asset));
 }
 
 /**
@@ -165,6 +192,9 @@ export class FighterView extends Container {
 
   /** 黒系カラー時だけ表示する、PNGキャラクターの白い外枠。 */
   private readonly spriteWhiteOutline?: Sprite;
+
+  /** 縮小した色替えマスクを元画像と同じ表示寸法へ戻す倍率。 */
+  private spriteColorLayerScale = 1;
 
   /** 前回反映したファイター座標。変化時だけContainer座標を更新する。 */
   private lastX = Number.NaN;
@@ -202,7 +232,7 @@ export class FighterView extends Container {
     // Blenderスプライトは先に生成し、読み込み済みテクスチャを描画に使う。
     const spriteDefinition = animation?.sprite;
     if (spriteDefinition) {
-      const sprite = Sprite.from(this.gameAssetUrl(spriteDefinition.asset));
+      const sprite = Sprite.from(gameAssetUrl(spriteDefinition.asset));
       sprite.anchor.set(spriteDefinition.anchor[0], spriteDefinition.anchor[1]);
       this.animatedSprite = sprite;
 
@@ -222,10 +252,12 @@ export class FighterView extends Container {
       whiteOutline.visible = false;
       this.spriteWhiteOutline = whiteOutline;
 
-      // PNG読込直後に一度だけ色替え用マスクを解析し、対戦中の負荷を増やさない。
-      void this.prepareSpriteColorLayers(
-        this.gameAssetUrl(spriteDefinition.asset),
-      );
+      if (fighter.character.colorVariant !== "default") {
+        // 色替え不要な既定色では、原寸PNGの全画素解析とマスク常駐を発生させない。
+        void this.prepareSpriteColorLayers(
+          gameAssetUrl(spriteDefinition.asset),
+        );
+      }
     }
 
     // 描画順
@@ -296,20 +328,15 @@ export class FighterView extends Container {
     const base = `${this.fighter.action}|${this.fighter.facing}|${Number(this.fighter.stun > 0)}`;
     const spriteDefinition = this.animation?.sprite;
     if (spriteDefinition) {
-      const poseFrame = Math.floor(
-        this.fighter.actionFrame / spriteDefinition.frameDuration,
-      );
-      return `${base}|${poseFrame}`;
+      return `${base}|${this.spritePoseFrameIndex(spriteDefinition)}`;
     }
-    if (this.animation) return `${base}|${this.fighter.actionFrame}`;
+    if (this.animation) {
+      // 同じ骨格ポーズを表示する硬直中は、Graphicsを再テッセレーションしない。
+      return `${base}|${this.blenderPoseFrameIndex() ?? "fallback"}`;
+    }
     return this.fighter.action === "walk"
       ? `${base}|${this.fighter.actionFrame % 16}`
       : base;
-  }
-
-  /** CSV内のアセットパスをViteの公開URLへ変換する。 */
-  private gameAssetUrl(path: string): string {
-    return `${import.meta.env.BASE_URL}${path.replace(/^\//, "")}`;
   }
 
   /** 初回画像解析で作ったマスクをスプライトへ設定する。 */
@@ -321,12 +348,14 @@ export class FighterView extends Container {
     const whiteOutline = this.spriteWhiteOutline;
     if (!colorOverlay || !whiteOutline) return;
 
-    colorOverlay.texture = Texture.from(analysis.colorMask, true);
+    // 同じキャラクター同士では解析Canvas由来のTextureをPixiキャッシュで共有する。
+    colorOverlay.texture = Texture.from(analysis.colorMask);
     colorOverlay.tint = this.fighter.character.primaryColor;
     colorOverlay.visible = this.fighter.character.colorVariant !== "default";
 
-    whiteOutline.texture = Texture.from(analysis.whiteOutlineMask, true);
+    whiteOutline.texture = Texture.from(analysis.whiteOutlineMask);
     whiteOutline.visible = this.usesWhiteOutline();
+    this.spriteColorLayerScale = analysis.displayScale;
 
     // 非同期でレイヤーを追加した直後も、次回更新で現在のポーズへ同期する。
     this.lastVisualKey = "";
@@ -336,8 +365,16 @@ export class FighterView extends Container {
   private spritePosesForCurrentAction(
     definition: BlenderSpriteAnimation,
   ): readonly BlenderSpritePose[] {
-    const action =
-      this.fighter.action === "crouchBlock" ? "block" : this.fighter.action;
+    if (this.fighter.action === "crouchBlock") {
+      // 専用ポーズがあれば再生し、旧JSONだけ立ちガードへ後方互換フォールバックする。
+      return (
+        definition.animations.crouchBlock ??
+        definition.animations.block ??
+        definition.animations.idle ??
+        []
+      );
+    }
+    const action = this.fighter.action;
     return definition.animations[action] ?? definition.animations.idle ?? [];
   }
 
@@ -345,6 +382,34 @@ export class FighterView extends Container {
   private updateBlenderSprite(definition: BlenderSpriteAnimation): void {
     const poses = this.spritePosesForCurrentAction(definition);
     const fallbackPose: BlenderSpritePose = {};
+    const pose =
+      poses.length === 0
+        ? fallbackPose
+        : poses[this.spritePoseFrameIndex(definition)];
+    const mirror = this.fighter.facing;
+    const scale = definition.scale * (pose.scale ?? 1);
+
+    // 元PNG・色オーバーレイ・白枠を完全に同じ姿勢で動かし、ずれを防ぐ。
+    if (this.animatedSprite) {
+      this.animatedSprite.position.set((pose.x ?? 0) * mirror, pose.y ?? 0);
+      this.animatedSprite.rotation = (pose.rotation ?? 0) * mirror;
+      this.animatedSprite.scale.set(scale * mirror, scale);
+    }
+    for (const sprite of [this.spriteColorOverlay, this.spriteWhiteOutline]) {
+      if (!sprite) continue;
+      sprite.position.set((pose.x ?? 0) * mirror, pose.y ?? 0);
+      sprite.rotation = (pose.rotation ?? 0) * mirror;
+      sprite.scale.set(
+        scale * mirror * this.spriteColorLayerScale,
+        scale * this.spriteColorLayerScale,
+      );
+    }
+  }
+
+  /** 実際に表示するスプライトポーズ番号を返し、同一ポーズの再描画を避ける。 */
+  private spritePoseFrameIndex(definition: BlenderSpriteAnimation): number {
+    const poses = this.spritePosesForCurrentAction(definition);
+    if (poses.length === 0) return 0;
     const frame = Math.floor(
       this.fighter.actionFrame / definition.frameDuration,
     );
@@ -353,26 +418,7 @@ export class FighterView extends Container {
       this.fighter.action === "walk" ||
       this.fighter.action === "block" ||
       this.fighter.action === "crouchBlock";
-    const pose =
-      poses.length === 0
-        ? fallbackPose
-        : poses[
-            looping ? frame % poses.length : Math.min(frame, poses.length - 1)
-          ];
-    const mirror = this.fighter.facing;
-    const scale = definition.scale * (pose.scale ?? 1);
-
-    // 元PNG・色オーバーレイ・白枠を完全に同じ姿勢で動かし、ずれを防ぐ。
-    for (const sprite of [
-      this.animatedSprite,
-      this.spriteColorOverlay,
-      this.spriteWhiteOutline,
-    ]) {
-      if (!sprite) continue;
-      sprite.position.set((pose.x ?? 0) * mirror, pose.y ?? 0);
-      sprite.rotation = (pose.rotation ?? 0) * mirror;
-      sprite.scale.set(scale * mirror, scale);
-    }
+    return looping ? frame % poses.length : Math.min(frame, poses.length - 1);
   }
 
   /** 黒系カラーは背景へ溶け込まないよう、白い境界線を表示する。 */
@@ -438,28 +484,37 @@ export class FighterView extends Container {
   private sampleBlenderPose() {
     const frames = this.blenderFramesForCurrentAction();
     if (!frames?.length) return undefined;
+    const index = this.blenderPoseFrameIndex();
+    return index === undefined ? undefined : frames[index];
+  }
 
+  /** 60FPSの経過フレームを、実際に表示するBlender骨格ポーズ番号へ変換する。 */
+  private blenderPoseFrameIndex(): number | undefined {
+    const frames = this.blenderFramesForCurrentAction();
+    if (!frames?.length || !this.animation) return undefined;
     const animationFrame = Math.floor(
-      (this.fighter.actionFrame * this.animation!.fps) / 60,
+      (this.fighter.actionFrame * this.animation.fps) /
+        FIGHTING_GAME_CONFIG.engine.fixedFps,
     );
     const looping =
       this.fighter.action === "idle" ||
       this.fighter.action === "walk" ||
       this.fighter.action === "block" ||
       this.fighter.action === "crouchBlock";
-    const index = looping
+    return looping
       ? animationFrame % frames.length
       : Math.min(animationFrame, frames.length - 1);
-    return frames[index];
   }
 
-  /** しゃがみガードはblockアクションへフォールバックしてボーンフレームを取得する。 */
+  /** しゃがみガード専用フレームを優先し、旧JSONだけblockへフォールバックする。 */
   private blenderFramesForCurrentAction() {
     const animations = this.animation?.animations;
     if (!animations) return undefined;
 
-    const action =
-      this.fighter.action === "crouchBlock" ? "block" : this.fighter.action;
+    if (this.fighter.action === "crouchBlock") {
+      return animations.crouchBlock ?? animations.block ?? animations.idle;
+    }
+    const action = this.fighter.action;
     return animations[action] ?? animations.idle;
   }
 

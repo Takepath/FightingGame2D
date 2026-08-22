@@ -1,4 +1,9 @@
 import { type FrameInput, InputButton, type PlayerId } from "./types";
+import {
+  type ConfigurableInputAction,
+  type ConfiguredGamepadBinding,
+  FIGHTING_GAME_CONFIG,
+} from "./gameConfig";
 
 /** Escは常にキャンセルに使うため、キーコンフィグの対象外とする。 */
 export const FIXED_CANCEL_KEY_CODE = "Escape";
@@ -7,15 +12,7 @@ export const FIXED_CANCEL_KEY_CODE = "Escape";
 export const FIXED_CANCEL_GAMEPAD_BUTTON_INDEX = 16;
 
 /** キーコンフィグで変更できるキーボード操作の識別子。 */
-export type KeyboardAction =
-  | "left"
-  | "right"
-  | "up"
-  | "down"
-  | "light"
-  | "heavy"
-  | "special"
-  | "throw";
+export type KeyboardAction = ConfigurableInputAction;
 
 /** キーコンフィグ画面と入力処理で共有する、操作項目の定義。 */
 export interface KeyboardActionDefinition {
@@ -49,7 +46,7 @@ export interface KeyBindingTarget {
  * Gamepad API の入力を保存する識別子。
  * button はボタン番号、axis はスティック軸番号と入力方向を表す。
  */
-export type GamepadBinding = `button:${number}` | `axis:${number}:${-1 | 1}`;
+export type GamepadBinding = ConfiguredGamepadBinding;
 
 /** キーの重複・予約キーなど、割り当て不可の理由。 */
 export type KeyBindingFailure = "reserved" | "modifier" | "duplicate";
@@ -70,6 +67,21 @@ type GamepadBindings = Record<
   PlayerId,
   Record<KeyboardAction, GamepadBinding[]>
 >;
+
+/** 文字列設定を毎フレーム正規表現解析しないための実行時形式。 */
+type ParsedGamepadBinding =
+  | { readonly kind: "button"; readonly index: number }
+  | {
+      readonly kind: "axis";
+      readonly index: number;
+      readonly direction: -1 | 1;
+    };
+
+/** 保存文字列ごとの解析結果。割り当て変更後も同じ文字列なら再利用できる。 */
+const parsedGamepadBindingCache = new Map<
+  GamepadBinding,
+  ParsedGamepadBinding
+>();
 
 /** ブラウザに保存するキーコンフィグのキー。 */
 const KEYBOARD_CONFIG_STORAGE_KEY = "fighting-game-2d.keyboard-config.v2";
@@ -93,55 +105,13 @@ const MODIFIER_KEY_CODES = new Set([
 ]);
 
 /** 初回起動時・リセット時に用いる標準キー配置。 */
-const DEFAULT_KEYBOARD_BINDINGS: KeyboardBindings = {
-  0: {
-    left: "KeyA",
-    right: "KeyD",
-    up: "KeyW",
-    down: "KeyS",
-    light: "KeyF",
-    heavy: "KeyG",
-    special: "KeyH",
-    throw: "Space",
-  },
-  1: {
-    left: "ArrowLeft",
-    right: "ArrowRight",
-    up: "ArrowUp",
-    down: "ArrowDown",
-    light: "Numpad1",
-    heavy: "Numpad2",
-    special: "Numpad3",
-    throw: "Numpad0",
-  },
-};
+const DEFAULT_KEYBOARD_BINDINGS = FIGHTING_GAME_CONFIG.input.keyboardDefaults;
 
 /**
  * Xbox コントローラーの初期配置。
  * 十字キーと左スティックを両方使えるよう、移動には二つの入力を登録する。
  */
-const DEFAULT_GAMEPAD_BINDINGS: GamepadBindings = {
-  0: {
-    left: ["axis:0:-1", "button:14"],
-    right: ["axis:0:1", "button:15"],
-    up: ["axis:1:-1", "button:12"],
-    down: ["axis:1:1", "button:13"],
-    light: ["button:0"],
-    heavy: ["button:2"],
-    special: ["button:1"],
-    throw: ["button:7"],
-  },
-  1: {
-    left: ["axis:0:-1", "button:14"],
-    right: ["axis:0:1", "button:15"],
-    up: ["axis:1:-1", "button:12"],
-    down: ["axis:1:1", "button:13"],
-    light: ["button:0"],
-    heavy: ["button:2"],
-    special: ["button:1"],
-    throw: ["button:7"],
-  },
-};
+const DEFAULT_GAMEPAD_BINDINGS = FIGHTING_GAME_CONFIG.input.gamepadDefaults;
 
 /** 初期値を参照渡しせずに使うため、キー配置を複製する。 */
 function cloneKeyboardBindings(): KeyboardBindings {
@@ -555,7 +525,8 @@ export function formatGamepadBinding(binding: GamepadBinding): string {
 function buttonDown(gamepad: Gamepad, index: number): boolean {
   return Boolean(
     gamepad.buttons[index]?.pressed ||
-    (gamepad.buttons[index]?.value ?? 0) > 0.5,
+    (gamepad.buttons[index]?.value ?? 0) >
+      FIGHTING_GAME_CONFIG.input.gamepad.buttonThreshold,
   );
 }
 
@@ -564,14 +535,25 @@ function gamepadBindingDown(
   gamepad: Gamepad,
   binding: GamepadBinding,
 ): boolean {
-  const buttonMatch = /^button:(\d+)$/.exec(binding);
-  if (buttonMatch) return buttonDown(gamepad, Number(buttonMatch[1]));
+  let parsed = parsedGamepadBindingCache.get(binding);
+  if (!parsed) {
+    const [kind, indexText, directionText] = binding.split(":");
+    parsed =
+      kind === "button"
+        ? { kind, index: Number(indexText) }
+        : {
+            kind: "axis",
+            index: Number(indexText),
+            direction: directionText === "-1" ? -1 : 1,
+          };
+    parsedGamepadBindingCache.set(binding, parsed);
+  }
+  if (parsed.kind === "button") return buttonDown(gamepad, parsed.index);
 
-  const axisMatch = /^axis:(\d+):(-1|1)$/.exec(binding);
-  if (!axisMatch) return false;
-  const value = gamepad.axes[Number(axisMatch[1])] ?? 0;
-  const direction = Number(axisMatch[2]);
-  return direction < 0 ? value < -0.45 : value > 0.45;
+  const value = gamepad.axes[parsed.index] ?? 0;
+  const direction = parsed.direction;
+  const threshold = FIGHTING_GAME_CONFIG.input.gamepad.axisThreshold;
+  return direction < 0 ? value < -threshold : value > threshold;
 }
 
 /**
@@ -592,6 +574,12 @@ export class InputManager {
   /** Home ボタンの前フレームの押下状態。押しっぱなしで連続キャンセルしないために使う。 */
   private gamepadHomeHeld = new Set<number>();
 
+  /** Home押下の今回分を格納し、前回Setとの交換で毎フレーム割り当てを避ける。 */
+  private gamepadHomeActive = new Set<number>();
+
+  /** 同じ描画更新内で共有し、Gamepad APIを何度も列挙しないスナップショット。 */
+  private readonly gamepadSnapshot: (Gamepad | null)[] = [];
+
   public constructor() {
     //====================================================
     // キーボードイベント登録
@@ -601,6 +589,16 @@ export class InputManager {
 
     // ウィンドウ非アクティブ時は入力をリセット
     window.addEventListener("blur", this.clear);
+    this.pollGamepads();
+  }
+
+  /** 描画更新の先頭でGamepad APIを一度だけ取得し、以降の入力処理で共有する。 */
+  public pollGamepads(): void {
+    this.gamepadSnapshot.length = 0;
+    if (typeof navigator === "undefined" || !navigator.getGamepads) return;
+    for (const gamepad of navigator.getGamepads()) {
+      this.gamepadSnapshot.push(gamepad);
+    }
   }
 
   /** 指定プレイヤーの現在の入力をフレーム入力へ変換する。 */
@@ -628,12 +626,19 @@ export class InputManager {
     this.gamepadCapturePlayer = null;
     this.gamepadCaptureHeld.clear();
     this.gamepadHomeHeld.clear();
+    this.gamepadHomeActive.clear();
+    this.gamepadSnapshot.length = 0;
   }
 
   /** 指定プレイヤーのゲームパッド入力を次回のキーコンフィグ変更として受け付ける。 */
   public beginGamepadBindingCapture(player: PlayerId): void {
     this.gamepadCapturePlayer = player;
-    this.gamepadCaptureHeld = new Set(this.pressedGamepadBindings(player, 0.7));
+    this.gamepadCaptureHeld = new Set(
+      this.pressedGamepadBindings(
+        player,
+        FIGHTING_GAME_CONFIG.input.gamepad.captureAxisThreshold,
+      ),
+    );
   }
 
   /** ゲームパッド入力の割り当て待機を終了する。 */
@@ -650,7 +655,10 @@ export class InputManager {
     const player = this.gamepadCapturePlayer;
     if (player === null) return null;
 
-    const pressedBindings = this.pressedGamepadBindings(player, 0.7);
+    const pressedBindings = this.pressedGamepadBindings(
+      player,
+      FIGHTING_GAME_CONFIG.input.gamepad.captureAxisThreshold,
+    );
     const nextBinding = pressedBindings.find(
       (binding) =>
         !this.gamepadCaptureHeld.has(binding) &&
@@ -665,15 +673,18 @@ export class InputManager {
    * ブラウザー・OS の仕様で Guide が公開されない機種では、通常どおり Esc を使える。
    */
   public consumeGamepadHomePress(): boolean {
-    const activeHomeButtons = new Set<number>();
+    const activeHomeButtons = this.gamepadHomeActive;
+    activeHomeButtons.clear();
     let pressedThisFrame = false;
 
-    for (const gamepad of this.connectedGamepads()) {
+    for (const gamepad of this.gamepadSnapshot) {
+      if (!gamepad?.connected) continue;
       if (!buttonDown(gamepad, FIXED_CANCEL_GAMEPAD_BUTTON_INDEX)) continue;
       activeHomeButtons.add(gamepad.index);
       if (!this.gamepadHomeHeld.has(gamepad.index)) pressedThisFrame = true;
     }
 
+    this.gamepadHomeActive = this.gamepadHomeHeld;
     this.gamepadHomeHeld = activeHomeButtons;
     return pressedThisFrame;
   }
@@ -713,18 +724,7 @@ export class InputManager {
 
   /** 指定プレイヤーに紐付くゲームパッドを安全に取得する。 */
   private gamepadForPlayer(player: PlayerId): Gamepad | null {
-    if (typeof navigator === "undefined" || !navigator.getGamepads) {
-      return null;
-    }
-    return navigator.getGamepads()[player] ?? null;
-  }
-
-  /** 接続済みゲームパッドを Home の固定操作確認用に列挙する。 */
-  private connectedGamepads(): Gamepad[] {
-    if (typeof navigator === "undefined" || !navigator.getGamepads) return [];
-    return Array.from(navigator.getGamepads()).filter(
-      (gamepad): gamepad is Gamepad => gamepad?.connected === true,
-    );
+    return this.gamepadSnapshot[player] ?? null;
   }
 
   /** 指定プレイヤーのゲームパッドから、しきい値を超えた全入力を取り出す。 */
@@ -737,7 +737,10 @@ export class InputManager {
 
     const bindings: GamepadBinding[] = [];
     gamepad.buttons.forEach((button, index) => {
-      if (button.pressed || button.value > 0.7) {
+      if (
+        button.pressed ||
+        button.value > FIGHTING_GAME_CONFIG.input.gamepad.buttonThreshold
+      ) {
         bindings.push(`button:${index}`);
       }
     });

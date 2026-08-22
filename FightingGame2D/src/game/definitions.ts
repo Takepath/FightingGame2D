@@ -1,6 +1,8 @@
 import { Assets } from "pixi.js";
 
+import { gameAssetUrl } from "./assets";
 import { csvRecords } from "./csv";
+import { FIGHTING_GAME_CONFIG, MAX_SUPPORTED_CHARACTERS } from "./gameConfig";
 import {
   type AttackLevel,
   type BlenderAnimationData,
@@ -13,7 +15,6 @@ import {
   type MoveDefinition,
   type MoveUseState,
   type ProjectileDefinition,
-  type ProjectileRenderType,
 } from "./types";
 
 /** ゲームデータCSVの読み込み元。ゲーム設定から差し替えられる。 */
@@ -25,7 +26,186 @@ export interface GameDataSourcePaths {
 }
 
 /** キャラクター選択画面が扱える絶対上限。 */
-export const MAX_SELECTABLE_CHARACTERS = 25;
+export const MAX_SELECTABLE_CHARACTERS = MAX_SUPPORTED_CHARACTERS;
+
+/** CSVの列順には依存せず、実行に必要な列名だけを起動時に検証する。 */
+const CHARACTER_HEADERS = [
+  "id",
+  "name",
+  "render_type",
+  "animation_asset",
+  "icon_asset",
+  "primary_color",
+  "accent_color",
+  "max_health",
+  "walk_speed",
+  "jump_velocity",
+  "hurtbox_width",
+  "hurtbox_top",
+  "hurtbox_bottom",
+] as const;
+const MOVE_HEADERS = [
+  "character_id",
+  "move_id",
+  "button",
+  "startup",
+  "active",
+  "recovery",
+  "invincible_frames",
+  "damage",
+  "special_gauge_cost",
+  "super_gauge_gain",
+  "guard_bleak",
+  "starter_proration",
+  "range_x",
+  "range_y",
+  "self_move_x",
+  "self_move_y",
+  "knockback_x",
+  "knockback_y",
+  "guard_knockback_x",
+  "guard_self_knockback_x",
+  "hitstun",
+  "guard_stun",
+  "animation",
+  "attack_type",
+  "projectile_speed",
+  "projectile_lifetime",
+  "use_state",
+  "attack_level",
+  "projectile_id",
+  "command_id",
+  "cancel_into",
+] as const;
+const COMMAND_HEADERS = [
+  "command_id",
+  "sequence",
+  "max_frames",
+  "priority",
+  "charge_frames",
+] as const;
+const PROJECTILE_HEADERS = [
+  "id",
+  "render_type",
+  "asset",
+  "width",
+  "height",
+  "outer_radius",
+  "middle_radius",
+  "core_radius",
+  "outer_color",
+  "middle_color",
+  "core_color",
+] as const;
+
+/** CSV編集エラーへファイル名・行・列を付け、設定箇所をすぐ特定できるようにする。 */
+function dataError(
+  fileName: string,
+  line: number,
+  column: string,
+  message: string,
+): never {
+  throw new Error(`${fileName} の${line}行目 ${column}: ${message}`);
+}
+
+/** 必須文字列を読み込み、空欄なら列位置付きで停止する。 */
+function requiredText(
+  row: Record<string, string>,
+  column: string,
+  fileName: string,
+  line: number,
+): string {
+  const value = row[column]?.trim() ?? "";
+  return value || dataError(fileName, line, column, "空欄にできません");
+}
+
+/** 数値セルを有限値として読み込み、必要なら整数・下限・上限も検証する。 */
+function dataNumber(
+  row: Record<string, string>,
+  column: string,
+  fileName: string,
+  line: number,
+  options: {
+    readonly integer?: boolean;
+    readonly min?: number;
+    readonly max?: number;
+  } = {},
+): number {
+  const raw = requiredText(row, column, fileName, line);
+  const value = Number(raw);
+  if (!Number.isFinite(value)) {
+    dataError(fileName, line, column, "有限の数値を指定してください");
+  }
+  if (options.integer && !Number.isInteger(value)) {
+    dataError(fileName, line, column, "整数を指定してください");
+  }
+  if (options.min !== undefined && value < options.min) {
+    dataError(fileName, line, column, `${options.min}以上を指定してください`);
+  }
+  if (options.max !== undefined && value > options.max) {
+    dataError(fileName, line, column, `${options.max}以下を指定してください`);
+  }
+  return value;
+}
+
+/** #RRGGBB形式だけを受け付け、NaN色が描画へ混入することを防ぐ。 */
+function dataColor(
+  row: Record<string, string>,
+  column: string,
+  fileName: string,
+  line: number,
+): number {
+  const value = requiredText(row, column, fileName, line);
+  if (!/^#[0-9a-f]{6}$/i.test(value)) {
+    dataError(fileName, line, column, "#RRGGBB形式で指定してください");
+  }
+  return Number.parseInt(value.slice(1), 16);
+}
+
+/** 区切り文字や通信キーと衝突しない、CSV内部IDの共通書式。 */
+const DATA_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** 必須IDを読み、予約語と書式を列位置付きで検証する。 */
+function dataId(
+  row: Record<string, string>,
+  column: string,
+  fileName: string,
+  line: number,
+  options: { readonly forbidAll?: boolean } = {},
+): string {
+  const value = requiredText(row, column, fileName, line);
+  if (!DATA_ID_PATTERN.test(value)) {
+    dataError(
+      fileName,
+      line,
+      column,
+      "64文字以内の半角英数字・_・-で指定してください",
+    );
+  }
+  if (options.forbidAll && value === "all") {
+    dataError(fileName, line, column, "予約ID all は使用できません");
+  }
+  return value;
+}
+
+/** 空欄を許す|区切り列を解析し、途中の空要素と重複を拒否する。 */
+function optionalList(
+  row: Record<string, string>,
+  column: string,
+  fileName: string,
+  line: number,
+): string[] {
+  const source = row[column]?.trim() ?? "";
+  if (!source) return [];
+  const values = source.split("|").map((value) => value.trim());
+  if (values.some((value) => value.length === 0)) {
+    dataError(fileName, line, column, "|の間に空の値を指定できません");
+  }
+  if (new Set(values).size !== values.length) {
+    dataError(fileName, line, column, "同じ値を重複して指定できません");
+  }
+  return values;
+}
 
 /**
  * CSVで定義されたボタン名をゲーム内のInputButton列挙値へ変換する対応表
@@ -51,51 +231,18 @@ const commandDirections = new Set<CommandDirection>([
 ]);
 
 /**
- * ゲーム内リソースのURLを生成する
- * BASE_URLを考慮して相対パスを絶対パスへ変換する
- */
-function gameUrl(path: string): string {
-  return `${import.meta.env.BASE_URL}${path.replace(/^\//, "")}`;
-}
-
-/**
  * テキストファイルを読み込む
  * 読み込みに失敗した場合は例外を送出する
  */
 async function loadText(path: string): Promise<string> {
-  const response = await fetch(gameUrl(path));
+  const response = await fetch(gameAssetUrl(path));
   if (!response.ok)
     throw new Error(`${path} の読み込みに失敗しました (${response.status})`);
   return response.text();
 }
 
 /**
- * "#RRGGBB"形式のカラー文字列を数値へ変換する
- */
-function toColor(value: string): number {
-  return Number.parseInt(value.replace("#", ""), 16);
-}
-
-/** 飛び道具用の色を読み込み、未指定時は既定色へ戻す。 */
-function toColorOr(value: string, fallback: number): number {
-  const color = toColor(value);
-  return Number.isFinite(color) ? color : fallback;
-}
-
-/** CSVの正の数値を読み込み、未指定・不正値は既定値へ戻す。 */
-function toPositiveNumber(value: string, fallback: number): number {
-  const number = Number(value);
-  return Number.isFinite(number) && number > 0 ? number : fallback;
-}
-
-/** CSVの飛び道具描画方式を、対応済みの方式へ正規化する。 */
-function toProjectileRenderType(value: string): ProjectileRenderType {
-  return value === "sprite" ? "sprite" : "circle";
-}
-
-/**
- * CSVのアニメーション名をFighterAction型へ変換する
- * 未知の値が指定された場合は"idle"を返す
+ * 検証済みのCSVアニメーション名をFighterAction型へ変換する。
  */
 function toAction(value: string): FighterAction {
   const known: FighterAction[] = [
@@ -107,6 +254,7 @@ function toAction(value: string): FighterAction {
     "special",
     "hit",
     "block",
+    "crouchBlock",
     "ko",
   ];
 
@@ -115,210 +263,464 @@ function toAction(value: string): FighterAction {
     : "idle";
 }
 
-/** CSVの use_state を、技の使用可能状態として安全に変換する。 */
+/** 検証済みのuse_stateを、技の使用可能状態へ変換する。 */
 function toMoveUseState(value: string): MoveUseState {
   if (value === "air") return "air";
   if (value === "any") return "any";
   return "ground";
 }
 
-/** CSVの attack_level を、上・中・下のガード属性として安全に変換する。 */
+/** 検証済みのattack_levelを、上・中・下のガード属性へ変換する。 */
 function toAttackLevel(value: string): AttackLevel {
   if (value === "high" || value === "上") return "high";
   if (value === "low" || value === "下") return "low";
   return "mid";
 }
 
-/** moves.csv の guard_bleak を、ガード貫通設定へ変換する。 */
-function toGuardBleak(value: string | undefined): boolean {
-  return value?.trim().toLowerCase() === "true";
-}
-
 /**
  * moves.csv の cancel_into を、キャンセル開始できる攻撃ボタン種別へ変換する。
- * 複数指定は light|heavy|special|throw のように | で区切り、未知の値は無視する。
+ * 複数指定は light|heavy|special|throw のように | で区切る。未知値は事前検証で拒否する。
  */
-function toCancelInto(value: string | undefined): readonly InputButton[] {
-  const buttons = new Set<InputButton>();
-  for (const name of (value ?? "").split("|")) {
-    const button = buttonNames[name.trim().toLowerCase()];
-    if (button !== undefined) buttons.add(button);
-  }
-  return [...buttons];
-}
-
-/**
- * moves.csv の command_idをコマンドID配列へ変換する。
- * hadoken|hadoken_simple のように書くと、いずれかの入力で同じ技を実行できる。
- */
-function toCommandIds(value: string | undefined): readonly string[] {
-  return [
-    ...new Set(
-      (value ?? "")
-        .split("|")
-        .map((id) => id.trim())
-        .filter(Boolean),
-    ),
-  ];
+function toCancelInto(names: readonly string[]): readonly InputButton[] {
+  return names.map((name) => buttonNames[name]);
 }
 
 /**
  * キャラクター定義CSVをCharacterDefinition配列へ変換する
  */
 function parseCharacters(source: string): CharacterDefinition[] {
-  return csvRecords(source).map((row) => ({
-    id: row.id,
-    name: row.name,
+  return csvRecords(source, {
+    fileName: "characters.csv",
+    requiredHeaders: CHARACTER_HEADERS,
+  }).map((row, index) => {
+    const line = index + 2;
+    const renderType = requiredText(row, "render_type", "characters.csv", line);
+    if (renderType !== "stick" && renderType !== "blender") {
+      dataError(
+        "characters.csv",
+        line,
+        "render_type",
+        "stick または blender を指定してください",
+      );
+    }
+    if (renderType === "blender" && !row.animation_asset?.trim()) {
+      dataError(
+        "characters.csv",
+        line,
+        "animation_asset",
+        "render_type=blender ではJSONパスが必要です",
+      );
+    }
 
-    // 描画方式（未指定時は棒人間）。
-    renderType: row.render_type === "blender" ? "blender" : "stick",
+    const hurtboxTop = dataNumber(row, "hurtbox_top", "characters.csv", line, {
+      min: 1,
+    });
+    const hurtboxBottom = dataNumber(
+      row,
+      "hurtbox_bottom",
+      "characters.csv",
+      line,
+      { min: 0 },
+    );
+    if (hurtboxBottom >= hurtboxTop) {
+      dataError(
+        "characters.csv",
+        line,
+        "hurtbox_bottom",
+        "hurtbox_top より小さくしてください",
+      );
+    }
 
-    // Blender書き出しJSONの資産パス。
-    animationAsset: row.animation_asset,
-
-    // キャラクター選択画面に表示するPNGアイコン
-    iconAsset: row.icon_asset,
-
-    // キャラクターカラー
-    // CSV読込時はデフォルト色とし、選択画面で対戦用の色へ差し替える。
-    colorVariant: "default",
-    primaryColor: toColor(row.primary_color),
-    accentColor: toColor(row.accent_color),
-
-    // 基本ステータス
-    // max_health は damage と同じ実数HPポイントで管理する。
-    maxHealth: Number(row.max_health),
-    walkSpeed: Number(row.walk_speed),
-    jumpVelocity: Number(row.jump_velocity),
-
-    // キャラクター本体に沿う被弾判定。未指定時も既定の棒人間サイズを使う。
-    hurtboxWidth: Number(row.hurtbox_width) || 52,
-    hurtboxTop: Number(row.hurtbox_top) || 150,
-    hurtboxBottom: Number(row.hurtbox_bottom) || 24,
-  }));
+    return {
+      id: dataId(row, "id", "characters.csv", line, { forbidAll: true }),
+      name: requiredText(row, "name", "characters.csv", line),
+      renderType,
+      animationAsset: row.animation_asset?.trim() ?? "",
+      iconAsset: row.icon_asset?.trim() ?? "",
+      colorVariant: "default",
+      primaryColor: dataColor(row, "primary_color", "characters.csv", line),
+      accentColor: dataColor(row, "accent_color", "characters.csv", line),
+      maxHealth: dataNumber(row, "max_health", "characters.csv", line, {
+        integer: true,
+        min: 1,
+      }),
+      walkSpeed: dataNumber(row, "walk_speed", "characters.csv", line, {
+        min: 1,
+      }),
+      jumpVelocity: dataNumber(row, "jump_velocity", "characters.csv", line, {
+        min: 1,
+      }),
+      hurtboxWidth: dataNumber(row, "hurtbox_width", "characters.csv", line, {
+        min: 1,
+      }),
+      hurtboxTop,
+      hurtboxBottom,
+    } satisfies CharacterDefinition;
+  });
 }
 
 /**
  * 技データCSVをMoveDefinition配列へ変換する
  */
 function parseMoves(source: string): MoveDefinition[] {
-  return csvRecords(source).map((row) => ({
-    // 指定が無い場合は全キャラクター共通技
-    characterId: row.character_id || "all",
+  return csvRecords(source, {
+    fileName: "moves.csv",
+    requiredHeaders: MOVE_HEADERS,
+  }).map((row, index) => {
+    const line = index + 2;
+    const characterId = dataId(row, "character_id", "moves.csv", line);
+    const moveId = dataId(row, "move_id", "moves.csv", line);
+    const buttonName = requiredText(
+      row,
+      "button",
+      "moves.csv",
+      line,
+    ).toLowerCase();
+    const button = buttonNames[buttonName];
+    if (button === undefined) {
+      dataError(
+        "moves.csv",
+        line,
+        "button",
+        "light / heavy / special / throw のいずれかを指定してください",
+      );
+    }
+    const animationName = requiredText(row, "animation", "moves.csv", line);
+    const knownAnimations: readonly FighterAction[] = [
+      "idle",
+      "walk",
+      "jump",
+      "light",
+      "heavy",
+      "special",
+      "hit",
+      "block",
+      "crouchBlock",
+      "ko",
+    ];
+    if (!knownAnimations.includes(animationName as FighterAction)) {
+      dataError(
+        "moves.csv",
+        line,
+        "animation",
+        `未対応の値です (${animationName})`,
+      );
+    }
+    const useState = requiredText(row, "use_state", "moves.csv", line);
+    if (useState !== "ground" && useState !== "air" && useState !== "any") {
+      dataError(
+        "moves.csv",
+        line,
+        "use_state",
+        "ground / air / any のいずれかを指定してください",
+      );
+    }
+    const attackLevel = requiredText(row, "attack_level", "moves.csv", line);
+    if (!["high", "mid", "low", "上", "中", "下"].includes(attackLevel)) {
+      dataError(
+        "moves.csv",
+        line,
+        "attack_level",
+        "high / mid / low のいずれかを指定してください",
+      );
+    }
+    const attackType = requiredText(row, "attack_type", "moves.csv", line);
+    if (attackType !== "melee" && attackType !== "projectile") {
+      dataError(
+        "moves.csv",
+        line,
+        "attack_type",
+        "melee または projectile を指定してください",
+      );
+    }
+    const guardBleak = requiredText(
+      row,
+      "guard_bleak",
+      "moves.csv",
+      line,
+    ).toLowerCase();
+    if (guardBleak !== "true" && guardBleak !== "false") {
+      dataError(
+        "moves.csv",
+        line,
+        "guard_bleak",
+        "true または false を指定してください",
+      );
+    }
+    const cancelNames = optionalList(row, "cancel_into", "moves.csv", line).map(
+      (name) => name.toLowerCase(),
+    );
+    if (new Set(cancelNames).size !== cancelNames.length) {
+      dataError(
+        "moves.csv",
+        line,
+        "cancel_into",
+        "同じ攻撃種別を重複して指定できません",
+      );
+    }
+    const invalidCancel = cancelNames.find(
+      (name) => buttonNames[name] === undefined,
+    );
+    if (invalidCancel) {
+      dataError(
+        "moves.csv",
+        line,
+        "cancel_into",
+        `未対応の攻撃種別です (${invalidCancel})`,
+      );
+    }
+    const commandIds = optionalList(row, "command_id", "moves.csv", line);
+    for (const commandId of commandIds) {
+      if (!DATA_ID_PATTERN.test(commandId)) {
+        dataError(
+          "moves.csv",
+          line,
+          "command_id",
+          `不正なIDです (${commandId})`,
+        );
+      }
+    }
 
-    id: row.move_id,
+    const startup = dataNumber(row, "startup", "moves.csv", line, {
+      integer: true,
+      min: 0,
+    });
+    const active = dataNumber(row, "active", "moves.csv", line, {
+      integer: true,
+      min: 1,
+    });
+    const recovery = dataNumber(row, "recovery", "moves.csv", line, {
+      integer: true,
+      min: 0,
+    });
+    const invincibleFrames = dataNumber(
+      row,
+      "invincible_frames",
+      "moves.csv",
+      line,
+      { integer: true, min: 0 },
+    );
+    if (invincibleFrames > startup + active + recovery) {
+      dataError(
+        "moves.csv",
+        line,
+        "invincible_frames",
+        "startup + active + recovery 以下にしてください",
+      );
+    }
+    const projectileSpeed = dataNumber(
+      row,
+      "projectile_speed",
+      "moves.csv",
+      line,
+      { min: 0 },
+    );
+    const projectileLifetime = dataNumber(
+      row,
+      "projectile_lifetime",
+      "moves.csv",
+      line,
+      { integer: true, min: 0 },
+    );
+    if (attackType === "projectile" && projectileSpeed <= 0) {
+      dataError(
+        "moves.csv",
+        line,
+        "projectile_speed",
+        "projectileでは0より大きい値が必要です",
+      );
+    }
+    if (attackType === "projectile" && projectileLifetime <= 0) {
+      dataError(
+        "moves.csv",
+        line,
+        "projectile_lifetime",
+        "projectileでは1以上のフレーム数が必要です",
+      );
+    }
 
-    // 入力ボタン
-    button: buttonNames[row.button.toLowerCase()] ?? InputButton.Light,
-
-    // フレームデータ
-    startup: Number(row.startup),
-    active: Number(row.active),
-    recovery: Number(row.recovery),
-    // 無敵フレームが未指定の旧CSVは0Fとして扱い、既存の技設定と互換にする。
-    invincibleFrames: row.invincible_frames ? Number(row.invincible_frames) : 0,
-
-    // 攻撃性能
-    // 割合へ換算せず、CSVに記述した実数HPポイントをそのまま使用する。
-    damage: Number(row.damage),
-    // 空欄は消費なしとして扱い、既存の通常技をそのまま利用できるようにする。
-    specialGaugeCost: row.special_gauge_cost
-      ? Number(row.special_gauge_cost)
-      : 0,
-    // 技を開始した時点で加算する超必殺ゲージ量。空欄は0として既存CSVとも互換にする。
-    superGaugeGain: row.super_gauge_gain ? Number(row.super_gauge_gain) : 0,
-    // guard_bleak=trueの技は後ろ入力ガードを無視してダメージを与える。
-    guardPiercing: toGuardBleak(row.guard_bleak),
-    // コンボ始動補正は未指定時を0%として扱い、従来CSVも読み込めるようにする。
-    starterProration: Number(row.starter_proration) || 0,
-    // 硬直キャンセル先は light|heavy|special|throw の組み合わせでCSVに登録する。
-    cancelInto: toCancelInto(row.cancel_into),
-    rangeX: Number(row.range_x),
-    rangeY: Number(row.range_y),
-    // 技開始時に攻撃側へ与える移動量。正のY値は上方向へ移動する。
-    selfMoveX: Number(row.self_move_x) || 0,
-    selfMoveY: Number(row.self_move_y) || 0,
-    knockbackX: Number(row.knockback_x),
-    knockbackY: Number(row.knockback_y),
-    // 旧CSVでは通常ノックバックの1/3をガード時の初期値として再現する。
-    guardKnockbackX: row.guard_knockback_x
-      ? Number(row.guard_knockback_x)
-      : Number(row.knockback_x) / 3,
-    // ガードされた攻撃側の後退量は、未指定なら従来どおり0にする。
-    guardSelfKnockbackX: row.guard_self_knockback_x
-      ? Number(row.guard_self_knockback_x)
-      : 0,
-    hitstun: Number(row.hitstun),
-    // 旧CSVではヒットスタンの半分（最低1F）だったガード硬直を既定値にする。
-    guardStun: row.guard_stun
-      ? Number(row.guard_stun)
-      : Math.max(1, Math.trunc(Number(row.hitstun) / 2)),
-
-    // 再生するアニメーション
-    animation: toAction(row.animation),
-
-    // 使用可能状態（地上 / 空中 / 両方）
-    useState: toMoveUseState(row.use_state),
-
-    // 上・中・下属性（未指定時は中段）
-    attackLevel: toAttackLevel(row.attack_level),
-
-    // 攻撃種別（未指定時は近接攻撃）
-    attackType: row.attack_type === "projectile" ? "projectile" : "melee",
-
-    // 飛び道具用パラメータ
-    projectileSpeed: Number(row.projectile_speed) || 0,
-    projectileLifetime: Number(row.projectile_lifetime) || 0,
-    // projectiles.csv の見た目定義を参照するID。近接技は空欄のままにする。
-    projectileId: row.projectile_id || null,
-
-    // command_idは|区切りで複数参照でき、いずれかのコマンドで技を実行できる。
-    commandIds: toCommandIds(row.command_id),
-  }));
+    return {
+      characterId,
+      id: moveId,
+      button,
+      startup,
+      active,
+      recovery,
+      invincibleFrames,
+      damage: dataNumber(row, "damage", "moves.csv", line, {
+        integer: true,
+        min: 0,
+      }),
+      specialGaugeCost: dataNumber(
+        row,
+        "special_gauge_cost",
+        "moves.csv",
+        line,
+        {
+          integer: true,
+          min: 0,
+          max: FIGHTING_GAME_CONFIG.match.gauges.specialMax,
+        },
+      ),
+      superGaugeGain: dataNumber(row, "super_gauge_gain", "moves.csv", line, {
+        integer: true,
+        min: 0,
+        max: FIGHTING_GAME_CONFIG.match.gauges.superMax,
+      }),
+      guardPiercing: guardBleak === "true",
+      starterProration: dataNumber(
+        row,
+        "starter_proration",
+        "moves.csv",
+        line,
+        { integer: true },
+      ),
+      cancelInto: toCancelInto(cancelNames),
+      rangeX: dataNumber(row, "range_x", "moves.csv", line, { min: 0 }),
+      rangeY: dataNumber(row, "range_y", "moves.csv", line, { min: 0 }),
+      selfMoveX: dataNumber(row, "self_move_x", "moves.csv", line),
+      selfMoveY: dataNumber(row, "self_move_y", "moves.csv", line),
+      knockbackX: dataNumber(row, "knockback_x", "moves.csv", line, {
+        min: 0,
+      }),
+      knockbackY: dataNumber(row, "knockback_y", "moves.csv", line, {
+        min: 0,
+      }),
+      guardKnockbackX: dataNumber(row, "guard_knockback_x", "moves.csv", line, {
+        min: 0,
+      }),
+      guardSelfKnockbackX: dataNumber(
+        row,
+        "guard_self_knockback_x",
+        "moves.csv",
+        line,
+        { min: 0 },
+      ),
+      hitstun: dataNumber(row, "hitstun", "moves.csv", line, {
+        integer: true,
+        min: 0,
+      }),
+      guardStun: dataNumber(row, "guard_stun", "moves.csv", line, {
+        integer: true,
+        min: 0,
+      }),
+      animation: toAction(animationName),
+      useState: toMoveUseState(useState),
+      attackLevel: toAttackLevel(attackLevel),
+      attackType,
+      projectileSpeed,
+      projectileLifetime,
+      projectileId: row.projectile_id?.trim() || null,
+      commandIds,
+    } satisfies MoveDefinition;
+  });
 }
 
 /** projectiles.csvを飛び道具の見た目定義へ変換する。 */
 function parseProjectileDefinitions(source: string): ProjectileDefinition[] {
-  return csvRecords(source).map((row) => ({
-    id: row.id,
-    renderType: toProjectileRenderType(row.render_type),
-    asset: row.asset,
-    width: toPositiveNumber(row.width, 44),
-    height: toPositiveNumber(row.height, 44),
-    outerRadius: toPositiveNumber(row.outer_radius, 22),
-    middleRadius: toPositiveNumber(row.middle_radius, 14),
-    coreRadius: toPositiveNumber(row.core_radius, 7),
-    outerColor: toColorOr(row.outer_color, 0x4fd8ff),
-    middleColor: toColorOr(row.middle_color, 0x4fd8ff),
-    coreColor: toColorOr(row.core_color, 0xe8f8ff),
-  }));
+  return csvRecords(source, {
+    fileName: "projectiles.csv",
+    requiredHeaders: PROJECTILE_HEADERS,
+  }).map((row, index) => {
+    const line = index + 2;
+    const renderType = requiredText(
+      row,
+      "render_type",
+      "projectiles.csv",
+      line,
+    );
+    if (renderType !== "circle" && renderType !== "sprite") {
+      dataError(
+        "projectiles.csv",
+        line,
+        "render_type",
+        "circle または sprite を指定してください",
+      );
+    }
+    if (renderType === "sprite" && !row.asset?.trim()) {
+      dataError(
+        "projectiles.csv",
+        line,
+        "asset",
+        "render_type=sprite ではPNGパスが必要です",
+      );
+    }
+    return {
+      id: dataId(row, "id", "projectiles.csv", line),
+      renderType,
+      asset: row.asset?.trim() ?? "",
+      width: dataNumber(row, "width", "projectiles.csv", line, {
+        min: renderType === "sprite" ? 1 : 0,
+      }),
+      height: dataNumber(row, "height", "projectiles.csv", line, {
+        min: renderType === "sprite" ? 1 : 0,
+      }),
+      // 旧CSVに列がない場合は、従来と同じ共通半径を使って後方互換を保つ。
+      hitboxRadius: row.hitbox_radius?.trim()
+        ? dataNumber(row, "hitbox_radius", "projectiles.csv", line, { min: 1 })
+        : FIGHTING_GAME_CONFIG.match.combat.projectileHitboxRadius,
+      outerRadius: dataNumber(row, "outer_radius", "projectiles.csv", line, {
+        min: renderType === "circle" ? 1 : 0,
+      }),
+      middleRadius: dataNumber(row, "middle_radius", "projectiles.csv", line, {
+        min: renderType === "circle" ? 1 : 0,
+      }),
+      coreRadius: dataNumber(row, "core_radius", "projectiles.csv", line, {
+        min: renderType === "circle" ? 1 : 0,
+      }),
+      outerColor: dataColor(row, "outer_color", "projectiles.csv", line),
+      middleColor: dataColor(row, "middle_color", "projectiles.csv", line),
+      coreColor: dataColor(row, "core_color", "projectiles.csv", line),
+    } satisfies ProjectileDefinition;
+  });
 }
 
 /** commands.csv をゲーム内で使う方向コマンド定義へ変換する。 */
 function parseCommands(source: string): CommandDefinition[] {
-  return csvRecords(source).map((row, index) => {
-    const id = row.command_id;
-    const sequence = row.sequence
+  return csvRecords(source, {
+    fileName: "commands.csv",
+    requiredHeaders: COMMAND_HEADERS,
+  }).map((row, index) => {
+    const line = index + 2;
+    const id = dataId(row, "command_id", "commands.csv", line);
+    const sequenceSource = requiredText(row, "sequence", "commands.csv", line);
+    const sequence = sequenceSource
       .split(">")
-      .map((token) => token.trim().toLowerCase())
-      .filter((token) => token.length > 0);
+      .map((token) => token.trim().toLowerCase());
+    if (sequence.some((token) => token.length === 0)) {
+      dataError(
+        "commands.csv",
+        line,
+        "sequence",
+        ">の間に空の方向を指定できません",
+      );
+    }
     const invalidDirection = sequence.find(
       (token) => !commandDirections.has(token as CommandDirection),
     );
-    const maxFrames = Number(row.max_frames);
-    // priority未指定の旧CSVは0として読み込み、既存のコマンド定義を壊さない。
-    const priority = row.priority ? Number(row.priority) : 0;
-    // charge_frames未指定の旧CSVは0として読み込み、通常コマンドとして扱う。
-    const chargeFrames = row.charge_frames ? Number(row.charge_frames) : 0;
+    const maxFrames = dataNumber(row, "max_frames", "commands.csv", line, {
+      integer: true,
+      min: 0,
+    });
+    const priority = dataNumber(row, "priority", "commands.csv", line, {
+      integer: true,
+      min: 0,
+      max: 100,
+    });
+    const chargeFrames = dataNumber(
+      row,
+      "charge_frames",
+      "commands.csv",
+      line,
+      { integer: true, min: 0 },
+    );
 
-    if (!id) {
-      throw new Error(
-        `commands.csv の${index + 2}行目に command_id がありません`,
-      );
-    }
-    if (sequence.length === 0 || invalidDirection) {
-      throw new Error(
-        `commands.csv の ${id} に有効な sequence を指定してください`,
+    if (invalidDirection) {
+      dataError(
+        "commands.csv",
+        line,
+        "sequence",
+        `未対応の方向です (${invalidDirection})`,
       );
     }
     // 溜めコマンドでは、先頭の4を維持する時間をmax_framesへ含めない。
@@ -329,19 +731,6 @@ function parseCommands(source: string): CommandDefinition[] {
     if (!Number.isInteger(maxFrames) || maxFrames < minimumCommandFrames) {
       throw new Error(
         `commands.csv の ${id} の max_frames は入力間隔を満たす整数にしてください`,
-      );
-    }
-    if (!Number.isInteger(priority) || priority < 0 || priority > 100) {
-      throw new Error(
-        `commands.csv の ${id} の priority は0〜100の整数を指定してください`,
-      );
-    }
-
-    if (!Number.isInteger(chargeFrames) || chargeFrames < 0) {
-      throw new Error(
-        "commands.csv の " +
-          id +
-          " の charge_frames は0以上の整数を指定してください",
       );
     }
     if (chargeFrames > 0 && (sequence.length < 2 || sequence[0] !== "4")) {
@@ -359,6 +748,171 @@ function parseCommands(source: string): CommandDefinition[] {
       chargeFrames,
     };
   });
+}
+
+/** JSON値が配列以外のオブジェクトかを確認する。 */
+function isDataRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Blender JSONの必須構造を検証し、0F再生や不正座標による描画破損を防ぐ。 */
+function validateBlenderAnimationData(
+  value: unknown,
+  characterName: string,
+): asserts value is BlenderAnimationData {
+  const fail = (message: string): never => {
+    throw new Error(`${characterName} のBlenderアニメーションJSON: ${message}`);
+  };
+  if (!isDataRecord(value)) fail("ルートをオブジェクトにしてください");
+  const root = value as Record<string, unknown>;
+  const supportedFormats = new Set([
+    "fightinggame2d-blender-bones-v1",
+    "fightinggame2d-blender-sprite-v1",
+  ]);
+  if (typeof root.format !== "string" || !supportedFormats.has(root.format)) {
+    fail("format は対応済みのbones-v1またはsprite-v1にしてください");
+  }
+  if (
+    typeof root.fps !== "number" ||
+    !Number.isFinite(root.fps) ||
+    root.fps <= 0
+  ) {
+    fail("fps は0より大きい数値にしてください");
+  }
+  if (!isDataRecord(root.animations)) {
+    fail("animations をオブジェクトにしてください");
+  }
+  for (const [action, frames] of Object.entries(
+    root.animations as Record<string, unknown>,
+  )) {
+    if (!Array.isArray(frames))
+      fail(`animations.${action} は配列にしてください`);
+    for (const frame of frames as unknown[]) {
+      if (!isDataRecord(frame) || !Array.isArray(frame.segments)) {
+        fail(`animations.${action} の各要素にsegments配列が必要です`);
+      }
+      const frameRecord = frame as Record<string, unknown>;
+      for (const segment of frameRecord.segments as unknown[]) {
+        if (
+          !Array.isArray(segment) ||
+          segment.length < 4 ||
+          segment.length > 5 ||
+          segment.some(
+            (coordinate) =>
+              typeof coordinate !== "number" || !Number.isFinite(coordinate),
+          ) ||
+          (segment.length === 5 && (segment[4] as number) <= 0)
+        ) {
+          fail(`animations.${action} のsegmentsに不正な座標・線幅があります`);
+        }
+      }
+    }
+  }
+  if (root.sprite === undefined) return;
+  if (!isDataRecord(root.sprite)) fail("sprite をオブジェクトにしてください");
+  const sprite = root.sprite as Record<string, unknown>;
+  if (typeof sprite.asset !== "string" || !sprite.asset.trim()) {
+    fail("sprite.asset に画像パスを指定してください");
+  }
+  if (
+    typeof sprite.scale !== "number" ||
+    !Number.isFinite(sprite.scale) ||
+    sprite.scale <= 0
+  ) {
+    fail("sprite.scale は0より大きい数値にしてください");
+  }
+  if (
+    !Array.isArray(sprite.anchor) ||
+    sprite.anchor.length !== 2 ||
+    sprite.anchor.some(
+      (coordinate: unknown) =>
+        typeof coordinate !== "number" ||
+        !Number.isFinite(coordinate) ||
+        coordinate < 0 ||
+        coordinate > 1,
+    )
+  ) {
+    fail("sprite.anchor は0〜1の数値2個で指定してください");
+  }
+  if (
+    typeof sprite.frameDuration !== "number" ||
+    !Number.isInteger(sprite.frameDuration) ||
+    sprite.frameDuration <= 0
+  ) {
+    fail("sprite.frameDuration は1以上の整数にしてください");
+  }
+  if (
+    sprite.nameplateY !== undefined &&
+    (typeof sprite.nameplateY !== "number" ||
+      !Number.isFinite(sprite.nameplateY))
+  ) {
+    fail("sprite.nameplateY は有限の数値にしてください");
+  }
+  if (!isDataRecord(sprite.animations)) {
+    fail("sprite.animations をオブジェクトにしてください");
+  }
+  for (const [action, poses] of Object.entries(
+    sprite.animations as Record<string, unknown>,
+  )) {
+    if (!Array.isArray(poses))
+      fail(`sprite.animations.${action} は配列にしてください`);
+    for (const pose of poses as unknown[]) {
+      if (!isDataRecord(pose)) {
+        fail(
+          `sprite.animations.${action} の各ポーズはオブジェクトにしてください`,
+        );
+      }
+      const poseRecord = pose as Record<string, unknown>;
+      for (const property of ["x", "y", "rotation", "scale"] as const) {
+        const coordinate = poseRecord[property];
+        if (
+          coordinate !== undefined &&
+          (typeof coordinate !== "number" || !Number.isFinite(coordinate))
+        ) {
+          fail(
+            `sprite.animations.${action}.${property} は有限の数値にしてください`,
+          );
+        }
+        if (
+          property === "scale" &&
+          typeof coordinate === "number" &&
+          coordinate <= 0
+        ) {
+          fail(
+            `sprite.animations.${action}.scale は0より大きい数値にしてください`,
+          );
+        }
+      }
+    }
+  }
+}
+
+/** 選択されたBlenderキャラクターだけJSON・PNGを読み、失敗時は棒人間へ戻す。 */
+export async function loadCharacterAnimation(
+  character: CharacterDefinition,
+): Promise<BlenderAnimationData | undefined> {
+  if (character.renderType !== "blender" || !character.animationAsset) {
+    return undefined;
+  }
+  try {
+    const response = await fetch(gameAssetUrl(character.animationAsset));
+    if (!response.ok) {
+      throw new Error(
+        `${character.animationAsset} の読み込みに失敗しました (${response.status})`,
+      );
+    }
+    const animation: unknown = await response.json();
+    validateBlenderAnimationData(animation, character.name);
+    if (animation.sprite?.asset) {
+      await Assets.load(gameAssetUrl(animation.sprite.asset));
+    }
+    return animation;
+  } catch (error) {
+    console.warn(
+      `${error instanceof Error ? error.message : String(error)}。${character.name} は棒人間で描画します`,
+    );
+    return undefined;
+  }
 }
 
 /**
@@ -386,45 +940,6 @@ export async function loadGameData(
   const commands = parseCommands(commandCsv);
   const projectileDefinitions = parseProjectileDefinitions(projectileCsv);
 
-  // PNGスプライトを使う飛び道具は、対戦画面へ進む前にテクスチャを読み込む。
-  await Promise.all(
-    projectileDefinitions
-      .filter(
-        (projectile) => projectile.renderType === "sprite" && projectile.asset,
-      )
-      .map((projectile) => Assets.load(gameUrl(projectile.asset))),
-  );
-
-  // Blender指定キャラクターの、書き出し済みアニメーションJSONを並列で読み込む。
-  const blenderAnimations: Record<string, BlenderAnimationData> = {};
-  await Promise.all(
-    characters
-      .filter(
-        (character) =>
-          character.renderType === "blender" && character.animationAsset,
-      )
-      .map(async (character) => {
-        const response = await fetch(gameUrl(character.animationAsset));
-
-        // アニメーションが存在しない場合は棒人間描画へフォールバック
-        if (!response.ok) {
-          // 任意アセットの読み込み失敗でゲーム全体を止めず、棒人間描画へフォールバックする。
-          console.warn(
-            `${character.name} のBlenderアニメーションを読み込めないため棒人間で描画します`,
-          );
-          return;
-        }
-        const animation = (await response.json()) as BlenderAnimationData;
-
-        // スプライト形式では、対戦画面を生成する前にPNGをPixiのテクスチャキャッシュへ登録する。
-        if (animation.sprite?.asset) {
-          await Assets.load(gameUrl(animation.sprite.asset));
-        }
-
-        blenderAnimations[character.id] = animation;
-      }),
-  );
-
   // 設定値が画面の対応範囲に収まることを先に保証する。
   if (
     !Number.isInteger(maxCharacters) ||
@@ -449,75 +964,6 @@ export async function loadGameData(
   }
 
   // オンライン対戦でCSVのIDを選択値として送るため、重複を禁止する。
-  // HPとダメージは同じ単位の整数ポイントとして扱い、割合指定や小数値を受け付けない。
-  for (const character of characters) {
-    if (!Number.isInteger(character.maxHealth) || character.maxHealth <= 0) {
-      throw new Error(
-        `characters.csv の ${character.id} の max_health は1以上の整数HPを指定してください`,
-      );
-    }
-  }
-  for (const move of moves) {
-    if (
-      !Number.isInteger(move.invincibleFrames) ||
-      move.invincibleFrames < 0 ||
-      move.invincibleFrames > move.startup + move.active + move.recovery
-    ) {
-      throw new Error(
-        "moves.csv の " +
-          move.id +
-          " の invincible_frames は0以上、技の全体フレーム以下の整数を指定してください",
-      );
-    }
-    if (
-      !Number.isFinite(move.guardKnockbackX) ||
-      move.guardKnockbackX < 0 ||
-      !Number.isFinite(move.guardSelfKnockbackX) ||
-      move.guardSelfKnockbackX < 0
-    ) {
-      throw new Error(
-        "moves.csv の " +
-          move.id +
-          " の guard_knockback_x / guard_self_knockback_x は0以上の数値を指定してください",
-      );
-    }
-    if (!Number.isInteger(move.guardStun) || move.guardStun < 0) {
-      throw new Error(
-        "moves.csv の " +
-          move.id +
-          " の guard_stun は0以上の整数フレームを指定してください",
-      );
-    }
-    if (!Number.isInteger(move.damage) || move.damage < 0) {
-      throw new Error(
-        `moves.csv の ${move.id} の damage は0以上の整数ダメージを指定してください`,
-      );
-    }
-    if (
-      !Number.isInteger(move.specialGaugeCost) ||
-      move.specialGaugeCost < 0 ||
-      move.specialGaugeCost > 100
-    ) {
-      throw new Error(
-        `moves.csv の ${move.id} の special_gauge_cost は0〜100の整数を指定してください`,
-      );
-    }
-    if (
-      !Number.isInteger(move.superGaugeGain) ||
-      move.superGaugeGain < 0 ||
-      move.superGaugeGain > 300
-    ) {
-      throw new Error(
-        `moves.csv の ${move.id} の super_gauge_gain は0〜300の整数を指定してください`,
-      );
-    }
-    if (!Number.isInteger(move.starterProration)) {
-      throw new Error(
-        `moves.csv の ${move.id} の starter_proration は整数パーセントを指定してください`,
-      );
-    }
-  }
-
   const characterIds = new Set(characters.map((character) => character.id));
   if (characterIds.size !== characters.length) {
     throw new Error("characters.csv の id は重複なしで定義してください");
@@ -563,6 +1009,11 @@ export async function loadGameData(
     }
   }
   for (const move of moves) {
+    if (move.characterId !== "all" && !characterIds.has(move.characterId)) {
+      throw new Error(
+        `moves.csv の ${move.id} が未定義の character_id (${move.characterId}) を参照しています`,
+      );
+    }
     if (move.attackType === "projectile") {
       if (!move.projectileId || !projectileIds.has(move.projectileId)) {
         throw new Error(
@@ -576,12 +1027,46 @@ export async function loadGameData(
     }
   }
 
+  // 明示したCPU必殺技IDの綴り違いを、別技への暗黙フォールバック前に検出する。
+  for (const [characterId, settings] of Object.entries(
+    FIGHTING_GAME_CONFIG.cpu.characters,
+  )) {
+    if (characterId === "default") continue;
+    if (!characterIds.has(characterId)) {
+      throw new Error(
+        `gameConfig.ts の cpu.characters.${characterId} は未定義キャラクターです`,
+      );
+    }
+    if (!settings.specialMoveId) continue;
+    const configuredMove =
+      moves.find(
+        (move) =>
+          move.characterId === characterId &&
+          move.id === settings.specialMoveId,
+      ) ??
+      moves.find(
+        (move) =>
+          move.characterId === "all" && move.id === settings.specialMoveId,
+      );
+    if (
+      !configuredMove ||
+      configuredMove.commandIds.length === 0 ||
+      (configuredMove.useState !== "ground" &&
+        configuredMove.useState !== "any")
+    ) {
+      throw new Error(
+        `gameConfig.ts の cpu.characters.${characterId}.specialMoveId (${settings.specialMoveId}) は地上で使えるコマンド技を指定してください`,
+      );
+    }
+  }
+
   // 全ゲームデータを返す
   return {
     characters,
     moves,
     commands,
     projectileDefinitions,
-    blenderAnimations,
+    // 重いJSON・PNGは選択後にloadCharacterAnimationで必要分だけ読み込む。
+    blenderAnimations: {},
   };
 }

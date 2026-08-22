@@ -1,11 +1,16 @@
+import { Assets } from "pixi.js";
 import type { CreationEngine } from "../engine/engine";
+import { gameAssetUrl } from "./assets";
 import {
   characterWithColor,
   colorOptionsFor,
   nextColorVariant,
 } from "./colors";
 import type { CpuLevel } from "./cpu";
-import type { FightingGameConfig } from "./gameConfig";
+import { loadCharacterAnimation } from "./definitions";
+import { createDeterministicDataFingerprint } from "./dataFingerprint";
+import { preloadSpriteColorAnalysis } from "./fighterView";
+import { FIGHTING_GAME_CONFIG } from "./gameConfig";
 import { MatchScreen } from "./matchScreen";
 import { RoomClient } from "./online";
 import { RoomLobby } from "./roomLobby";
@@ -31,9 +36,6 @@ interface MatchSetup {
   readonly characters: readonly [CharacterDefinition, CharacterDefinition];
   readonly colors: readonly [ColorVariant, ColorVariant];
 }
-
-/** VS画面を表示してから実際の対戦画面へ遷移する時間。 */
-const MATCHUP_DURATION_MS = 1800;
 
 /** 図で示された、Top・待ち受け・キャラクター選択・対戦の遷移を管理する。 */
 export class MenuFlow {
@@ -63,6 +65,8 @@ export class MenuFlow {
     document.querySelectorAll<HTMLButtonElement>("[data-cpu-level]"),
   );
   private readonly choices: CharacterChoice[];
+  /** 両ブラウザのCSV・決定論設定が同一か、対戦開始前に比較する指紋。 */
+  private readonly dataFingerprint: string;
   private readonly lobby: RoomLobby;
   private mode: MenuMode = "local";
   private onlineClient: RoomClient | null = null;
@@ -81,14 +85,21 @@ export class MenuFlow {
   private matchStarting = false;
   /** VS画面の表示を終了して対戦へ進めるためのタイマー。 */
   private matchupTimer: number | null = null;
+  /** 中断済みの非同期素材読込が、後から古い対戦を開くことを防ぐ世代番号。 */
+  private matchStartGeneration = 0;
+  /** 同じBlender JSONの同時取得を1本へまとめる。失敗後は次回選択時に再試行する。 */
+  private readonly animationLoadPromises = new Map<string, Promise<void>>();
 
   /** メニューボタンとロビーを初期化し、最初にTop画面を表示する。 */
   public constructor(
     private readonly engine: CreationEngine,
     private readonly data: GameData,
-    private readonly config: FightingGameConfig,
   ) {
     this.choices = this.createChoices();
+    this.dataFingerprint = createDeterministicDataFingerprint(
+      data,
+      FIGHTING_GAME_CONFIG,
+    );
     document
       .getElementById("menu-local")!
       .addEventListener("click", () => this.showCharacterSelect("local"));
@@ -111,13 +122,14 @@ export class MenuFlow {
       (client) => this.showCharacterSelect("online", client),
       // 対戦中に相手が退出した場合も、Pixi画面を破棄してTopへ戻す。
       () => this.returnToTop(),
-      this.config.onlineRoom,
+      FIGHTING_GAME_CONFIG.onlineRoom,
     );
     this.showTop();
   }
 
   /** Top画面だけを表示し、未完了のオンライン選択状態を破棄する。 */
   public showTop(): void {
+    this.matchStartGeneration += 1;
     if (this.matchupTimer !== null) {
       window.clearTimeout(this.matchupTimer);
       this.matchupTimer = null;
@@ -168,6 +180,7 @@ export class MenuFlow {
 
   /** モードに合わせた説明と9枚のカードを表示し、選択を受け付ける。 */
   private showCharacterSelect(mode: MenuMode, client?: RoomClient): void {
+    this.matchStartGeneration += 1;
     // 対戦中に相手が先に送信した選択は、新しい選択画面へ引き継ぐ。
     const queuedOnlineChoice =
       mode === "online" && client === this.onlineClient
@@ -197,8 +210,14 @@ export class MenuFlow {
       this.characterStatus.textContent =
         "相手もキャラクターを選択するまで待機します。";
       this.removeOnlineSelectionListener = client.onSelection(
-        (choiceId, color) => {
+        (choiceId, color, dataFingerprint) => {
           if (this.onlineClient !== client) return;
+          if (dataFingerprint !== this.dataFingerprint) {
+            this.remoteChoice = null;
+            this.characterStatus.textContent =
+              "対戦相手とゲームデータの版が一致しません。両方のブラウザで再読み込みしてください。";
+            return;
+          }
           const choice = this.choices.find(
             (candidate) => candidate.choiceId === choiceId,
           );
@@ -326,17 +345,12 @@ export class MenuFlow {
 
     const icon = document.createElement("img");
     icon.className = "character-icon";
-    icon.src = this.gameAssetUrl(character.iconAsset);
+    icon.src = gameAssetUrl(character.iconAsset);
     icon.alt = `${character.name} のアイコン`;
     icon.addEventListener("error", () => icon.replaceWith(fallback()), {
       once: true,
     });
     return icon;
-  }
-
-  /** ViteのBASE_URLを考慮して、CSVの公開アセットパスを画像URLへ変換する。 */
-  private gameAssetUrl(path: string): string {
-    return `${import.meta.env.BASE_URL}${path.replace(/^\//, "")}`;
   }
 
   /** 選択したキャラクターを保持し、続けて5色のカラー選択へ進める。 */
@@ -394,7 +408,11 @@ export class MenuFlow {
     if (this.mode === "online" && this.onlineClient) {
       this.characterTitle.textContent = "対戦相手の選択を待っています";
       this.characterStatus.textContent = `${choice.character.name}（${this.colorLabel(choice.character, color)}）を選択しました。`;
-      this.onlineClient.sendSelection(choice.choiceId, color);
+      this.onlineClient.sendSelection(
+        choice.choiceId,
+        color,
+        this.dataFingerprint,
+      );
       this.startOnlineMatchIfReady();
       return;
     }
@@ -470,6 +488,7 @@ export class MenuFlow {
   ): void {
     if (this.matchStarting) return;
     this.matchStarting = true;
+    const generation = ++this.matchStartGeneration;
 
     const setup = this.createMatchSetup(selections);
     this.topMenu.classList.add("is-hidden");
@@ -478,10 +497,19 @@ export class MenuFlow {
     this.colorSelect.classList.add("is-hidden");
     this.renderMatchup(setup);
     this.matchupScreen.classList.remove("is-hidden");
+    // VS表示時間と素材I/Oを並行させ、初回選択時の余分な待ち時間を抑える。
+    const preloadPromise = this.preloadMatchAssets(setup.characters);
+    // タイマーまでに失敗しても未処理Promiseにせず、startMatch側で同じ例外を表示する。
+    void preloadPromise.catch(() => undefined);
     this.matchupTimer = window.setTimeout(() => {
       this.matchupTimer = null;
-      void this.startMatch(setup.characters, client);
-    }, MATCHUP_DURATION_MS);
+      void this.startMatch(
+        setup.characters,
+        client,
+        preloadPromise,
+        generation,
+      );
+    }, FIGHTING_GAME_CONFIG.characterSelect.matchupDurationMs);
   }
 
   /** トレーニング以外の同キャラ同色だけを、P2の次色へ強制変更する。 */
@@ -575,22 +603,98 @@ export class MenuFlow {
   private async startMatch(
     selectedCharacters: readonly [CharacterDefinition, CharacterDefinition],
     client?: RoomClient,
+    preloadPromise = this.preloadMatchAssets(selectedCharacters),
+    generation = this.matchStartGeneration,
   ): Promise<void> {
-    // 対戦中も選択イベントを1件だけ監視し、相手が先に戻った時の選択を次回画面へ引き継ぐ。
-    this.matchupScreen.classList.add("is-hidden");
-    // トレーニングではP2の入力を固定し、練習専用の対戦にする。
-    MatchScreen.configure(
-      this.data,
-      selectedCharacters,
-      this.mode === "training",
-      this.mode === "local" ? this.cpuLevel : null,
-      {
-        returnToTop: () => this.returnToTop(),
-        returnToCharacterSelect: () => this.returnToCharacterSelect(client),
-      },
+    try {
+      // 最大25体分を起動時に読まず、今回使うJSON・PNG・飛び道具だけをVS中に準備する。
+      await preloadPromise;
+      if (generation !== this.matchStartGeneration) return;
+      this.matchupScreen.classList.add("is-hidden");
+      // トレーニングではP2の入力を固定し、練習専用の対戦にする。
+      MatchScreen.configure(
+        this.data,
+        selectedCharacters,
+        this.mode === "training",
+        this.mode === "local" ? this.cpuLevel : null,
+        {
+          returnToTop: () => this.returnToTop(),
+          returnToCharacterSelect: () => this.returnToCharacterSelect(client),
+        },
+      );
+      await this.engine.navigation.showScreen(MatchScreen);
+      const match = this.engine.navigation.currentScreen;
+      if (client && match instanceof MatchScreen) match.startOnline(client);
+    } catch (error) {
+      if (generation !== this.matchStartGeneration) return;
+      const message = error instanceof Error ? error.message : String(error);
+      this.matchupScreen.classList.add("is-hidden");
+      this.showCharacterSelect(this.mode, client);
+      this.characterStatus.textContent = `対戦用アセットを読み込めませんでした: ${message}`;
+    }
+  }
+
+  /** 選択キャラクターが実際に使う、重い対戦アセットだけを並列読込する。 */
+  private async preloadMatchAssets(
+    selectedCharacters: readonly [CharacterDefinition, CharacterDefinition],
+  ): Promise<void> {
+    const uniqueCharacters = [
+      ...new Map(
+        selectedCharacters.map((character) => [character.id, character]),
+      ).values(),
+    ];
+    await Promise.all(
+      uniqueCharacters.map(async (character) => {
+        if (this.data.blenderAnimations[character.id]) return;
+        const activeLoad = this.animationLoadPromises.get(character.id);
+        if (activeLoad) {
+          await activeLoad;
+          return;
+        }
+        const load = (async () => {
+          const animation = await loadCharacterAnimation(character);
+          if (animation) this.data.blenderAnimations[character.id] = animation;
+        })();
+        this.animationLoadPromises.set(character.id, load);
+        try {
+          await load;
+        } finally {
+          // 成功時はdata側がキャッシュとなり、失敗時は次の選択で再試行できる。
+          this.animationLoadPromises.delete(character.id);
+        }
+      }),
     );
-    await this.engine.navigation.showScreen(MatchScreen);
-    const match = this.engine.navigation.currentScreen;
-    if (client && match instanceof MatchScreen) match.startOnline(client);
+    // 非デフォルト色だけはVS中にマスクを生成し、対戦開始直後の色変化を防ぐ。
+    await Promise.all(
+      uniqueCharacters
+        .filter((character) => character.colorVariant !== "default")
+        .map((character) =>
+          preloadSpriteColorAnalysis(this.data.blenderAnimations[character.id]),
+        ),
+    );
+
+    const characterIds = new Set(
+      selectedCharacters.map((character) => character.id),
+    );
+    const projectileIds = new Set(
+      this.data.moves
+        .filter(
+          (move) =>
+            move.attackType === "projectile" &&
+            (move.characterId === "all" || characterIds.has(move.characterId)),
+        )
+        .map((move) => move.projectileId)
+        .filter((id): id is string => Boolean(id)),
+    );
+    await Promise.all(
+      this.data.projectileDefinitions
+        .filter(
+          (projectile) =>
+            projectileIds.has(projectile.id) &&
+            projectile.renderType === "sprite" &&
+            projectile.asset,
+        )
+        .map((projectile) => Assets.load(gameAssetUrl(projectile.asset))),
+    );
   }
 }

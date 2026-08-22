@@ -8,30 +8,43 @@ import type {
   MoveDefinition,
   MoveUseState,
   PlayerId,
+  ProjectileDefinition,
 } from "./types";
 import { InputButton, pressed } from "./types";
 import type { DeterministicSimulation } from "./frameSynchronizer";
+import { FIGHTING_GAME_CONFIG } from "./gameConfig";
 
 export const POSITION_SCALE = 100;
-export const STAGE_WIDTH = 1280;
-export const STAGE_HEIGHT = 720;
-export const GROUND_Y = 570;
+const MATCH_CONFIG = FIGHTING_GAME_CONFIG.match;
+export const STAGE_WIDTH = MATCH_CONFIG.stage.width;
+export const STAGE_HEIGHT = MATCH_CONFIG.stage.height;
+export const GROUND_Y = MATCH_CONFIG.stage.groundY;
 
-const LEFT_WALL = 68 * POSITION_SCALE;
-const RIGHT_WALL = (STAGE_WIDTH - 68) * POSITION_SCALE;
-const GRAVITY_PER_FRAME = 78;
-const PASS_THROUGH_HEIGHT = 96 * POSITION_SCALE;
-const AIR_CONTROL_PERCENT = 22;
-const AIR_DRAG_PERCENT = 97;
-const PUSHBOX_PADDING = 8 * POSITION_SCALE;
-const ATTACK_CENTER_FROM_GROUND = 86 * POSITION_SCALE;
-const PROJECTILE_HITBOX_RADIUS = 14 * POSITION_SCALE;
+const LEFT_WALL = MATCH_CONFIG.stage.wallPadding * POSITION_SCALE;
+const RIGHT_WALL =
+  (STAGE_WIDTH - MATCH_CONFIG.stage.wallPadding) * POSITION_SCALE;
+const GRAVITY_PER_FRAME = MATCH_CONFIG.physics.gravityPerFrame;
+const PASS_THROUGH_HEIGHT =
+  MATCH_CONFIG.physics.passThroughHeight * POSITION_SCALE;
+const AIR_CONTROL_PERCENT = MATCH_CONFIG.physics.airControlPercent;
+const AIR_DRAG_PERCENT = MATCH_CONFIG.physics.airDragPercent;
+const GROUND_DRAG_PERCENT = MATCH_CONFIG.physics.groundDragPercent;
+const BACKWARD_WALK_RATIO = MATCH_CONFIG.physics.backwardWalkRatio;
+const PUSHBOX_PADDING = MATCH_CONFIG.physics.pushboxPadding * POSITION_SCALE;
+const ATTACK_CENTER_FROM_GROUND =
+  MATCH_CONFIG.combat.attackCenterFromGround * POSITION_SCALE;
+const PROJECTILE_HITBOX_RADIUS =
+  MATCH_CONFIG.combat.projectileHitboxRadius * POSITION_SCALE;
 /** 投げ抜け時に両者を離す距離。 */
-const THROW_TECH_KNOCKBACK_DISTANCE = 120 * POSITION_SCALE;
+const THROW_TECH_KNOCKBACK_DISTANCE =
+  MATCH_CONFIG.combat.throwTechKnockbackDistance * POSITION_SCALE;
 /** 投げ抜け時に両者へ与える横方向のノックバック速度。 */
-const THROW_TECH_KNOCKBACK_SPEED = (780 * POSITION_SCALE) / 60;
+const THROW_TECH_KNOCKBACK_SPEED =
+  (MATCH_CONFIG.combat.throwTechKnockbackSpeed * POSITION_SCALE) /
+  FIGHTING_GAME_CONFIG.engine.fixedFps;
 /** 後ろ投げ後、強攻撃の最大リーチに加えて確保する余白。 */
-const BACK_THROW_HEAVY_RANGE_MARGIN = 12 * POSITION_SCALE;
+const BACK_THROW_HEAVY_RANGE_MARGIN =
+  MATCH_CONFIG.combat.backThrowHeavyRangeMargin * POSITION_SCALE;
 /** ガード解除や技選択で扱う、全攻撃ボタンのビット集合。 */
 const ATTACK_BUTTON_MASK =
   InputButton.Light |
@@ -43,55 +56,55 @@ const ATTACK_BUTTON_MASK =
 const BUFFERABLE_ACTION_BUTTON_MASK = ATTACK_BUTTON_MASK | InputButton.Up;
 
 /** 押下後に行動可能になるまで受け付ける、先行入力の固定フレーム数。 */
-export const INPUT_BUFFER_FRAMES = 5;
+export const INPUT_BUFFER_FRAMES = MATCH_CONFIG.input.bufferFrames;
 
 /** コマンドの最後の方向入力後に、技ボタンを受け付ける固定猶予フレーム数。 */
-const COMMAND_BUTTON_GRACE_FRAMES = 6;
+const COMMAND_BUTTON_GRACE_FRAMES = MATCH_CONFIG.input.commandButtonGraceFrames;
 
 /**
  * 溜め入力中に後ろ方向が途切れても、前方向を入力していない合計4Fまでは
  * 溜めを継続するための許容フレーム数。
  */
-const CHARGE_INPUT_GAP_FRAMES = 4;
+const CHARGE_INPUT_GAP_FRAMES = MATCH_CONFIG.input.chargeInputGapFrames;
 
 /** 固定60FPSを秒数へ換算するためのフレーム数。 */
-export const FRAMES_PER_SECOND = 60;
+export const FRAMES_PER_SECOND = FIGHTING_GAME_CONFIG.engine.fixedFps;
 
 /** 必殺技ゲージの最大値。HUDとCSVの消費量もこの値を上限にする。 */
-export const MAX_SPECIAL_GAUGE = 100;
+export const MAX_SPECIAL_GAUGE = MATCH_CONFIG.gauges.specialMax;
 
 /** 超必殺ゲージの最大値。技を使うたびにCSV指定量を加算する。 */
-export const MAX_SUPER_GAUGE = 300;
+export const MAX_SUPER_GAUGE = MATCH_CONFIG.gauges.superMax;
 
 /** 必殺技ゲージを1ポイント回復するまでの固定フレーム数（毎秒1ポイント）。 */
-const SPECIAL_GAUGE_RECOVERY_FRAMES = FRAMES_PER_SECOND;
+const SPECIAL_GAUGE_RECOVERY_FRAMES = MATCH_CONFIG.gauges.specialRecoveryFrames;
 
 /** ヒットスタンがこの値を超えた実ヒットで、ヒットストップを開始する。 */
-const HIT_STOP_HITSTUN_THRESHOLD = 30;
+const HIT_STOP_HITSTUN_THRESHOLD = MATCH_CONFIG.combat.hitStopHitstunThreshold;
 
 /** 強い攻撃が命中した後、ゲーム進行を静止する固定フレーム数。 */
-export const HIT_STOP_FRAMES = 5;
+export const HIT_STOP_FRAMES = MATCH_CONFIG.combat.hitStopFrames;
 
 /** 1試合は最大3ラウンドで決着する。 */
-export const MAX_ROUNDS = 3;
+export const MAX_ROUNDS = MATCH_CONFIG.rounds.winsRequired * 2 - 1;
 
 /** 2ラウンド先取で試合勝利とする。 */
-export const ROUNDS_TO_WIN = 2;
+export const ROUNDS_TO_WIN = MATCH_CONFIG.rounds.winsRequired;
 
 /** 通常対戦の各ラウンド制限時間（秒）。 */
-export const ROUND_TIME_SECONDS = 99;
+export const ROUND_TIME_SECONDS = MATCH_CONFIG.rounds.timeSeconds;
 
 /** ラウンド開始時に中央表示する時間（固定フレーム）。 */
-export const ROUND_INTRO_FRAMES = FRAMES_PER_SECOND * 2;
+export const ROUND_INTRO_FRAMES = MATCH_CONFIG.rounds.introFrames;
 
 /** ラウンド勝者を表示してから次のラウンドへ進む時間（固定フレーム）。 */
-const ROUND_RESULT_FRAMES = FRAMES_PER_SECOND * 4;
+const ROUND_RESULT_FRAMES = MATCH_CONFIG.rounds.resultFrames;
 
 /** 初段を含めて弱攻撃を3HITまでにするため、初段後に選べる弱攻撃の最大回数。 */
-const COMBO_LIGHT_CANCEL_LIMIT = 2;
+const COMBO_LIGHT_CANCEL_LIMIT = MATCH_CONFIG.combat.lightCancelLimit;
 
 /** 初段を含めて強攻撃を2HITまでにするため、初段後に選べる強攻撃の最大回数。 */
-const COMBO_HEAVY_CANCEL_LIMIT = 1;
+const COMBO_HEAVY_CANCEL_LIMIT = MATCH_CONFIG.combat.heavyCancelLimit;
 
 /** 弱・強を種類ごとに切り替えても超えられない、通常技キャンセルの総数。 */
 const COMBO_NORMAL_CANCEL_LIMIT =
@@ -203,6 +216,8 @@ export interface ProjectileState {
   visualId: string;
   x: number;
   y: number;
+  /** projectiles.csv由来の円形命中判定半径（固定小数点）。 */
+  hitboxRadius: number;
   velocityX: number;
   life: number;
   damage: number;
@@ -256,6 +271,8 @@ export class MatchSimulation implements DeterministicSimulation {
   >();
   /** command_idから方向コマンドを即時取得する索引。 */
   private readonly commandsById: ReadonlyMap<string, CommandDefinition>;
+  /** 飛び道具の見た目IDから命中判定半径を引く索引。 */
+  private readonly projectileHitboxRadiusById: ReadonlyMap<string, number>;
   /** コマンド判定に必要な入力履歴の最大フレーム数。 */
   private readonly inputHistoryLimit: number;
   /** トレーニング中、P1の攻撃後にP2の体力を即時回復するか。 */
@@ -273,11 +290,18 @@ export class MatchSimulation implements DeterministicSimulation {
     commands: readonly CommandDefinition[],
     /** トレーニング中は時計を止め、∞表示にする。 */
     private readonly training = false,
+    projectileDefinitions: readonly ProjectileDefinition[] = [],
   ) {
     /** 使用キャラクターとCSV技定義から、2人分の初期状態を生成する。 */
     this.createMoveIndexes(moves);
     this.commandsById = new Map(
       commands.map((command) => [command.id, command]),
+    );
+    this.projectileHitboxRadiusById = new Map(
+      projectileDefinitions.map((projectile) => [
+        projectile.id,
+        projectile.hitboxRadius * POSITION_SCALE,
+      ]),
     );
     this.inputHistoryLimit = Math.max(
       1,
@@ -396,7 +420,7 @@ export class MatchSimulation implements DeterministicSimulation {
     return {
       player,
       character,
-      x: (player === 0 ? 360 : 920) * POSITION_SCALE,
+      x: MATCH_CONFIG.stage.startX[player] * POSITION_SCALE,
       y: GROUND_Y * POSITION_SCALE,
       velocityX: 0,
       velocityY: 0,
@@ -530,9 +554,8 @@ export class MatchSimulation implements DeterministicSimulation {
     const nextX = projectile.x + projectile.velocityX;
     return (
       Math.abs(nextX - defender.x) <=
-        this.hurtboxHalfWidth(defender) + PROJECTILE_HITBOX_RADIUS &&
-      this.distanceToHurtboxY(projectile.y, defender) <=
-        PROJECTILE_HITBOX_RADIUS
+        this.hurtboxHalfWidth(defender) + projectile.hitboxRadius &&
+      this.distanceToHurtboxY(projectile.y, defender) <= projectile.hitboxRadius
     );
   }
 
@@ -636,7 +659,9 @@ export class MatchSimulation implements DeterministicSimulation {
       if (direction !== 0) {
         fighter.velocityX =
           direction *
-          Math.round((fighter.character.walkSpeed * POSITION_SCALE) / 60);
+          Math.round(
+            (fighter.character.walkSpeed * POSITION_SCALE) / FRAMES_PER_SECOND,
+          );
       }
       fighter.velocityY = -fighter.character.jumpVelocity;
       fighter.action = "jump";
@@ -737,7 +762,9 @@ export class MatchSimulation implements DeterministicSimulation {
       Math.min(RIGHT_WALL, fighter.x + fighter.velocityX),
     );
     fighter.velocityX = Math.trunc(
-      (fighter.velocityX * (airborne ? AIR_DRAG_PERCENT : 84)) / 100,
+      (fighter.velocityX *
+        (airborne ? AIR_DRAG_PERCENT : GROUND_DRAG_PERCENT)) /
+        100,
     );
     if (airborne) {
       fighter.y += fighter.velocityY;
@@ -756,6 +783,8 @@ export class MatchSimulation implements DeterministicSimulation {
     useState: MoveUseState,
   ): MoveDefinition | undefined {
     /** 現在または先行入力の攻撃ボタンと地上・空中状態から、CSVコマンド技を優先して選ぶ。 */
+    // 攻撃入力がない通常フレームでは候補技を走査せず、毎フレームの無駄を避ける。
+    if ((attackButtons & ATTACK_BUTTON_MASK) === 0) return undefined;
     const candidates = this.movesByCharacter.get(fighter.character.id) ?? [];
     let selectedCommandMove: MoveDefinition | undefined;
     let selectedPriority = -1;
@@ -929,10 +958,8 @@ export class MatchSimulation implements DeterministicSimulation {
     if (!fighter.comboCancelable || !this.isComboSourceMove(activeMove)) {
       return false;
     }
-    const defender = this.fighters[fighter.player === 0 ? 1 : 0];
-    // キャンセルは相手がヒットスタン中、または空中やられ中に限る。
-    // 硬直終了後の遅い入力で保留ノックバックを取り消さないようにする。
-    if (!this.isComboContinuation(fighter, defender)) return false;
+    // comboCancelableは命中またはガード接触時だけ立つため、ガード時もCSV指定の
+    // キャンセルを許可する。ヒット時の確定状態延長は専用処理側でのみ行う。
     // キャンセル先は、実行中の技のCSV設定に登録された種別だけに限定する。
     if (!activeMove.cancelInto.includes(cancelMove.button)) return false;
     if (cancelMove.button === InputButton.Light) {
@@ -955,7 +982,7 @@ export class MatchSimulation implements DeterministicSimulation {
     );
   }
 
-  /** cancel_intoを持つ近接技だけを、命中後のコンボキャンセル始動技として扱う。 */
+  /** cancel_intoを持つ近接技だけを、命中・ガード接触後のキャンセル始動技として扱う。 */
   private isComboSourceMove(move: MoveDefinition): boolean {
     return move.attackType === "melee" && move.cancelInto.length > 0;
   }
@@ -1009,16 +1036,19 @@ export class MatchSimulation implements DeterministicSimulation {
     for (const character of this.characters) {
       if (this.movesByCharacter.has(character.id)) continue;
 
-      const characterMoves: MoveDefinition[] = [];
       const movesById = new Map<string, MoveDefinition>();
+      const moveIdOrder: string[] = [];
       for (const move of moves) {
         if (move.characterId !== "all" && move.characterId !== character.id) {
           continue;
         }
-        characterMoves.push(move);
-        // 以前と同じくCSVで先に定義された技を優先する。
-        if (!movesById.has(move.id)) movesById.set(move.id, move);
+        if (!movesById.has(move.id)) moveIdOrder.push(move.id);
+        // 固有技はCSVの行順に依存せず、同じIDの全員共通技を上書きする。
+        if (move.characterId === character.id || !movesById.has(move.id)) {
+          movesById.set(move.id, move);
+        }
       }
+      const characterMoves = moveIdOrder.map((id) => movesById.get(id)!);
       this.movesByCharacter.set(character.id, characterMoves);
       this.movesByCharacterAndId.set(character.id, movesById);
     }
@@ -1091,9 +1121,11 @@ export class MatchSimulation implements DeterministicSimulation {
     }
 
     const backwardThrow = attacker.throwDirection === -1;
-    // 後ろ投げだけは、CSVで設定した投げダメージの80%にする。
+    // 後ろ投げだけは、gameConfigで設定した比率をCSVの投げダメージへ適用する。
     const damage = backwardThrow
-      ? Math.trunc((move.damage * 80) / 100)
+      ? Math.trunc(
+          (move.damage * MATCH_CONFIG.combat.backThrowDamagePercent) / 100,
+        )
       : move.damage;
     this.applyHit(attacker, defender, { ...move, damage }, defenderInput);
     attacker.attackConnected = true;
@@ -1255,11 +1287,20 @@ export class MatchSimulation implements DeterministicSimulation {
     this.projectiles.push({
       owner: attacker.player,
       visualId: move.projectileId ?? "",
-      x: attacker.x + attacker.facing * 64 * POSITION_SCALE,
-      y: attacker.y - 82 * POSITION_SCALE,
+      x:
+        attacker.x +
+        attacker.facing *
+          MATCH_CONFIG.combat.projectileSpawnOffsetX *
+          POSITION_SCALE,
+      y:
+        attacker.y -
+        MATCH_CONFIG.combat.projectileSpawnOffsetY * POSITION_SCALE,
+      hitboxRadius:
+        this.projectileHitboxRadiusById.get(move.projectileId ?? "") ??
+        PROJECTILE_HITBOX_RADIUS,
       velocityX:
         attacker.facing *
-        Math.round((move.projectileSpeed * POSITION_SCALE) / 60),
+        Math.round((move.projectileSpeed * POSITION_SCALE) / FRAMES_PER_SECOND),
       life: move.projectileLifetime,
       damage: move.damage,
       guardPiercing: move.guardPiercing,
@@ -1285,9 +1326,9 @@ export class MatchSimulation implements DeterministicSimulation {
       const attacker = this.fighters[projectile.owner];
       const collides =
         Math.abs(projectile.x - defender.x) <=
-          this.hurtboxHalfWidth(defender) + PROJECTILE_HITBOX_RADIUS &&
+          this.hurtboxHalfWidth(defender) + projectile.hitboxRadius &&
         this.distanceToHurtboxY(projectile.y, defender) <=
-          PROJECTILE_HITBOX_RADIUS;
+          projectile.hitboxRadius;
       if (collides) {
         const connected = this.applyHit(
           attacker,
@@ -1392,11 +1433,14 @@ export class MatchSimulation implements DeterministicSimulation {
     }
     const velocityX = defending
       ? attacker.facing *
-        Math.trunc((attack.guardKnockbackX * POSITION_SCALE) / 60)
-      : attacker.facing * Math.trunc((attack.knockbackX * POSITION_SCALE) / 60);
+        Math.trunc(
+          (attack.guardKnockbackX * POSITION_SCALE) / FRAMES_PER_SECOND,
+        )
+      : attacker.facing *
+        Math.trunc((attack.knockbackX * POSITION_SCALE) / FRAMES_PER_SECOND);
     const velocityY = defending
       ? 0
-      : -Math.trunc((attack.knockbackY * POSITION_SCALE) / 60);
+      : -Math.trunc((attack.knockbackY * POSITION_SCALE) / FRAMES_PER_SECOND);
     const shouldDeferKnockback =
       deferKnockback && !defending && defender.health > 0;
     if (shouldDeferKnockback) {
@@ -1420,7 +1464,9 @@ export class MatchSimulation implements DeterministicSimulation {
       // ガードされた攻撃側も、CSV指定量だけ後方へ反動させて間合いを調整する。
       attacker.velocityX =
         -attacker.facing *
-        Math.trunc((attack.guardSelfKnockbackX * POSITION_SCALE) / 60);
+        Math.trunc(
+          (attack.guardSelfKnockbackX * POSITION_SCALE) / FRAMES_PER_SECOND,
+        );
     }
     defender.guardStance = defending ? guardStance : null;
     defender.action = defending
@@ -1465,14 +1511,23 @@ export class MatchSimulation implements DeterministicSimulation {
 
   /**
    * 段数に応じた補正率を返す。
-   * 1・2段目は100%、3段目から80%、以降10%ずつ減衰し、最低10%で固定する。
+   * 既定値は1・2段目100%、3段目80%、以降10%ずつ減衰し、最低10%で固定する。
    */
   private comboDamagePercent(
     hitCount: number,
     starterProration: number,
   ): number {
-    const basePercent = hitCount <= 2 ? 100 : Math.max(10, 110 - hitCount * 10);
-    return Math.max(10, basePercent + starterProration);
+    const settings = MATCH_CONFIG.combat.comboProration;
+    const reducedHitOffset = hitCount - settings.fullDamageHits - 1;
+    const basePercent =
+      hitCount <= settings.fullDamageHits
+        ? settings.fullDamagePercent
+        : Math.max(
+            settings.minimumPercent,
+            settings.firstReducedHitPercent -
+              Math.max(0, reducedHitOffset) * settings.decayPerHitPercent,
+          );
+    return Math.max(settings.minimumPercent, basePercent + starterProration);
   }
 
   private applyAirControl(fighter: FighterState, input: FrameInput): void {
@@ -1481,7 +1536,12 @@ export class MatchSimulation implements DeterministicSimulation {
     if (direction === 0) return;
     const desiredVelocity =
       direction *
-      Math.round((fighter.character.walkSpeed * POSITION_SCALE * 82) / 6000);
+      Math.round(
+        (fighter.character.walkSpeed *
+          POSITION_SCALE *
+          MATCH_CONFIG.physics.airMovementSpeedPercent) /
+          (FRAMES_PER_SECOND * 100),
+      );
     fighter.velocityX += Math.trunc(
       ((desiredVelocity - fighter.velocityX) * AIR_CONTROL_PERCENT) / 100,
     );
@@ -1490,11 +1550,11 @@ export class MatchSimulation implements DeterministicSimulation {
   /** 地上移動は前方向を基準速度、後ろ方向をその3分の1の速度にする。 */
   private groundMoveSpeed(fighter: FighterState, direction: number): number {
     const forwardSpeed = Math.round(
-      (fighter.character.walkSpeed * POSITION_SCALE) / 60,
+      (fighter.character.walkSpeed * POSITION_SCALE) / FRAMES_PER_SECOND,
     );
     return direction === fighter.facing
       ? forwardSpeed
-      : Math.trunc(forwardSpeed / 3);
+      : Math.trunc(forwardSpeed * BACKWARD_WALK_RATIO);
   }
 
   private horizontalDirection(input: FrameInput): number {

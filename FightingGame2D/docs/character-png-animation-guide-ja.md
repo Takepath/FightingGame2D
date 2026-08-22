@@ -61,17 +61,18 @@ git diff --check
 
 ゲームで利用できるアクション名は次のとおりです。使用しないアクションは `idle` のポーズへフォールバックしますが、最低でも `idle`・`walk`・`jump`・`light`・`heavy`・`special` を用意することを推奨します。
 
-| アクション | 用途                       |
-| ---------- | -------------------------- |
-| `idle`     | 待機                       |
-| `walk`     | 前後歩き                   |
-| `jump`     | ジャンプ                   |
-| `light`    | 弱攻撃                     |
-| `heavy`    | 強攻撃                     |
-| `special`  | 必殺技                     |
-| `hit`      | 被弾                       |
-| `block`    | 立ちガード・しゃがみガード |
-| `ko`       | KO                         |
+| アクション    | 用途                              |
+| ------------- | --------------------------------- |
+| `idle`        | 待機                              |
+| `walk`        | 前後歩き                          |
+| `jump`        | ジャンプ                          |
+| `light`       | 弱攻撃                            |
+| `heavy`       | 強攻撃                            |
+| `special`     | 必殺技                            |
+| `hit`         | 被弾                              |
+| `block`       | 立ちガード                        |
+| `crouchBlock` | しゃがみガード（省略時は`block`） |
+| `ko`          | KO                                |
 
 ### 3.2 推奨するファイル構成
 
@@ -164,6 +165,7 @@ public/data/characters/river_guard/idle_000.png
       ],
       "hit": [{ "x": -12, "rotation": -0.12 }],
       "block": [{ "x": -3, "rotation": -0.06, "scale": 0.98 }],
+      "crouchBlock": [{ "x": -2, "y": 18, "rotation": -0.04, "scale": 0.84 }],
       "ko": [{ "x": -14, "y": 16, "rotation": 1.1, "scale": 0.95 }]
     }
   }
@@ -192,7 +194,7 @@ public/data/characters/river_guard/idle_000.png
 `public/data/characters.csv` の末尾に1行追加します。`render_type` を `blender` にすると、`animation_asset` のJSONを読み込みます。
 
 ```csv
-river_guard,RIVER GUARD,blender,data/animations/river_guard.json,data/characters/river_guard/icon.png,#4A9B73,#E9B949,105,315,1880,64,168,20
+river_guard,RIVER GUARD,blender,data/animations/river_guard.json,data/characters/river_guard/icon.png,#4A9B73,#E9B949,10000,315,1880,64,168,20
 ```
 
 列の意味は次のとおりです。
@@ -214,48 +216,60 @@ river_guard,RIVER GUARD,blender,data/animations/river_guard.json,data/characters
 
 キャラクター数は2〜25体です。画像が大きくても、被弾判定は見た目に合わせて必ず調整してください。
 
-## 6. 固有技をmoves.csvへ追加する
+## 6. 飛び道具の見た目をprojectiles.csvへ追加する
 
-`public/data/moves.csv` に固有技を追加します。**同じ `move_id` を持つ共通技（`character_id=all`）より前**に固有技を置くと、キャラクター固有の値が優先されます。
+飛び道具技を作る場合は、技より先に`public/data/projectiles.csv`へ見た目IDを追加します。`hitbox_radius`は見た目と独立した命中判定半径です。旧形式CSVでは列ごと省略でき、その場合は`gameConfig.ts`の共通値（既定14px）を使います。
 
 ```csv
-river_guard,light,light,5,3,13,800,0,false,0,68,58,0,0,280,0,17,light,melee,0,0,ground,mid,,
-river_guard,heavy,heavy,11,5,20,1800,0,false,0,96,70,0,0,560,520,34,heavy,melee,0,0,ground,high,,
-river_guard,special,special,14,7,25,2400,25,false,0,106,46,0,0,710,260,40,special,melee,0,0,ground,low,,
-river_guard,river_shot,special,10,2,28,1100,25,false,0,0,0,0,0,390,220,27,special,projectile,700,105,ground,mid,river_shot,
+id,render_type,asset,width,height,hitbox_radius,outer_radius,middle_radius,core_radius,outer_color,middle_color,core_color
+river_shot,circle,,52,52,16,26,17,8,#45B8FF,#8CDEFF,#F4FCFF
+```
+
+PNGを表示する場合は`render_type=sprite`、`asset=data/projectiles/river_shot.png`のように指定します。全列の意味は[CSV設定項目一覧](../public/data/CSV設定項目一覧.txt)を参照してください。
+
+## 7. 固有技をmoves.csvへ追加する
+
+`public/data/moves.csv` に固有技を追加します。同じ `move_id` の共通技（`character_id=all`）がある場合も、行順にかかわらずキャラクター固有行が優先されます。
+
+ここでは主要列だけを説明します。`invincible_frames`、ガード時硬直・ノックバック、ゲージ、キャンセルなどを含む完全な一覧は[CSV設定項目一覧](../public/data/CSV設定項目一覧.txt)を参照してください。
+
+```csv
+character_id,move_id,button,startup,active,recovery,invincible_frames,damage,special_gauge_cost,super_gauge_gain,guard_bleak,starter_proration,range_x,range_y,self_move_x,self_move_y,knockback_x,knockback_y,guard_knockback_x,guard_self_knockback_x,hitstun,guard_stun,animation,attack_type,projectile_speed,projectile_lifetime,use_state,attack_level,projectile_id,command_id,cancel_into
+river_guard,river_shot,special,10,2,28,0,1100,10,15,false,0,0,0,0,0,390,220,130,0,27,14,special,projectile,700,105,ground,mid,river_shot,river_shot,
 ```
 
 `moves.csv` の主要列は次のとおりです。
 
-| 列                                         | 内容                                                                |
-| ------------------------------------------ | ------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `character_id`                             | この技を使えるキャラクターID。全員共通は `all`。                    |
-| `move_id`                                  | 技ID。キャラクター内で重複させません。                              |
-| `button`                                   | `light`、`heavy`、`special`、`throw`。                              |
-| `startup` / `active` / `recovery`          | 発生・持続・硬直。すべて60FPS固定フレームです。                     |
-| `damage`                                   | ダメージ。`500` を指定すると500ダメージとなり、割合換算はしません。 |
-| `special_gauge_cost`                       | 必殺技ゲージの消費量。0〜100の整数で、残量不足時は技を出せません。  |
-| `guard_bleak`                              | `true` ならガードを貫通、`false` なら上中下属性に従ってガード可能。 |
-| `starter_proration`                        | 始動補正率。`20`なら120%、`-10`なら90%からコンボ減衰を開始します。  |
-| `range_x` / `range_y`                      | 近接技の前方リーチ・上下判定。                                      |
-| `self_move_x` / `self_move_y`              | 技開始時に自分へ与える前方・上方向の速度（px/秒）。正のY値は上昇。  |
-| `knockback_x` / `knockback_y`              | 命中時の横・縦方向の吹き飛び。                                      |
-| `hitstun`                                  | 命中時の硬直フレーム。                                              |
-| `animation`                                | JSONのアクション名。`light`・`heavy`・`special`など。               |
-| `attack_type`                              | `melee` または `projectile`。                                       |
-| `projectile_speed` / `projectile_lifetime` | 飛び道具の速度・生存フレーム。近接技は `0`。                        |
-| `use_state`                                | `ground`、`air`、`any`。                                            |
-| `attack_level`                             | `high`、`mid`、`low`。                                              |
-| `command_id`                               | `commands.csv` のID。複数指定は `                                   | ` 区切りで、いずれかの入力で発動。ボタンだけで出す技は空欄。 |
+| 列                                         | 内容                                                                                            |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| `character_id`                             | この技を使えるキャラクターID。全員共通は `all`。                                                |
+| `move_id`                                  | 技ID。キャラクター内で重複させません。                                                          |
+| `button`                                   | `light`、`heavy`、`special`、`throw`。                                                          |
+| `startup` / `active` / `recovery`          | 発生・持続・硬直。すべて60FPS固定フレームです。                                                 |
+| `damage`                                   | ダメージ。`500` を指定すると500ダメージとなり、割合換算はしません。                             |
+| `special_gauge_cost`                       | 必殺技ゲージの消費量。0〜100の整数で、残量不足時は技を出せません。                              |
+| `guard_bleak`                              | `true` ならガードを貫通、`false` なら上中下属性に従ってガード可能。                             |
+| `starter_proration`                        | 始動補正率。`20`なら120%、`-10`なら90%からコンボ減衰を開始します。                              |
+| `range_x` / `range_y`                      | 近接技の前方リーチ・上下判定。                                                                  |
+| `self_move_x` / `self_move_y`              | 技開始時に自分へ与える前方・上方向の速度（px/秒）。正のY値は上昇。                              |
+| `knockback_x` / `knockback_y`              | 命中時の横・縦方向の吹き飛び。                                                                  |
+| `hitstun`                                  | 命中時の硬直フレーム。                                                                          |
+| `animation`                                | JSONのアクション名。`light`・`heavy`・`special`など。                                           |
+| `attack_type`                              | `melee` または `projectile`。                                                                   |
+| `projectile_speed` / `projectile_lifetime` | 飛び道具の速度・生存フレーム。近接技は `0`。                                                    |
+| `use_state`                                | `ground`、`air`、`any`。                                                                        |
+| `attack_level`                             | `high`、`mid`、`low`。                                                                          |
+| `command_id`                               | `commands.csv` のID。複数指定は `\|` 区切りで、いずれかの入力で発動。ボタンだけで出す技は空欄。 |
 
 ガード属性は、`high` が立ちガードのみ、`low` がしゃがみガードのみ、`mid` が両方でガード可能です。ガード成功時のダメージは0です。
 
-## 7. コマンド技を追加する（任意）
+## 8. コマンド技を追加する（任意）
 
 波動拳型の飛び道具などには、`public/data/commands.csv` を使います。テンキー表記の方向列を登録し、`moves.csv` の `command_id` から参照します。
 
 ```csv
-river_shot,2>3>6,18
+command_id,sequence,max_frames,priority,charge_frames
+river_shot,2>3>6,18,10,0
 ```
 
 | テンキー表記 | 意味         |
@@ -268,9 +282,9 @@ river_shot,2>3>6,18
 | `1`          | 下後ろ       |
 | `5`          | ニュートラル |
 
-前後方向はキャラクターの向きを基準に判定されます。手動反転後も同じ `2>3>6` を使えます。
+前後方向はキャラクターの向きを基準に判定されます。自動振り向き後も同じ `2>3>6` を使えます。最後の方向入力から技ボタンまでは6フレームまで受け付けます。
 
-## 8. ゲーム内で確認する
+## 9. ゲーム内で確認する
 
 1. `npm run dev` を起動します。
 2. Chromeで表示されたURLを開きます。
@@ -289,20 +303,21 @@ npm run build
 git diff --check
 ```
 
-## 9. 外部公開前のチェックリスト
+## 10. 外部公開前のチェックリスト
 
 - [ ] すべてのPNGが透過背景で、余計な背景・ガイド線・透かしを含まない。
 - [ ] PNGのキャンバスサイズと足元位置が統一されている。
 - [ ] 使用した画像・Blender素材・生成画像の利用権とクレジット条件を確認した。
 - [ ] `characters.csv` のIDに重複がない。
 - [ ] `animation_asset` と `icon_asset` のパスが実在する。
-- [ ] `moves.csv` の固有技が共通技より前にある。
+- [ ] `moves.csv` の `character_id` が `characters.csv` のIDと一致している。
+- [ ] 飛び道具技の`projectile_id`が`projectiles.csv`のIDと一致している。
 - [ ] `command_id` を使う場合、`commands.csv` に重複なしで定義されている。
 - [ ] 待機・歩き・ジャンプ・攻撃・被弾・KOで見切れや名前の重なりがない。
 - [ ] 地面・被弾判定・リーチが見た目と大きくずれていない。
 - [ ] `npm run build` と `git diff --check` が成功する。
 
-## 10. よくある問題
+## 11. よくある問題
 
 | 症状                             | 原因と解決                                                                                                                                              |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -310,8 +325,8 @@ git diff --check
 | 棒人間で表示される               | `render_type=blender`、`animation_asset` のパス、JSON構文、PNGのパスを確認します。ブラウザーの開発者ツールのNetworkも確認します。                       |
 | 足が浮く・地面に埋まる           | 全フレームの足元をそろえ、JSONの `anchor[1]` を調整します。                                                                                             |
 | 名前がキャラクターに重なる       | `nameplateY` をより小さい値にします。例: `-184` → `-220`。                                                                                              |
-| 固有技ではなく共通技の性能になる | `moves.csv` の固有行を `all` 行より前へ移動し、`character_id` と `move_id` を確認します。                                                               |
-| コマンド技が出ない               | `commands.csv` の `command_id`、テンキー表記、`max_frames`、最後の方向入力から技ボタンまでが2フレーム以内か、`moves.csv` の `command_id` を確認します。 |
+| 固有技ではなく共通技の性能になる | `moves.csv` の `character_id` と `move_id`、重複行がないかを確認します。                                                                                |
+| コマンド技が出ない               | `commands.csv` の `command_id`、テンキー表記、`max_frames`、最後の方向入力から技ボタンまでが6フレーム以内か、`moves.csv` の `command_id` を確認します。 |
 | 連番PNGが切り替わらない          | 現行版の仕様です。JSONのポーズ補正で表現するか、連番PNG切替機能を実装してください。                                                                     |
 
 ## 付録: Blender Armatureを使う場合
@@ -322,4 +337,4 @@ BlenderのArmature Actionを骨格JSONとして出力する場合は、同梱の
 blender --background Fighter.blend --python tools/blender_export_fighting_animation.py -- --armature Armature --output public/data/animations/river_guard.json
 ```
 
-Blenderでは正面視点を `X=横、Z=縦` とし、Action名を `idle`、`walk`、`jump`、`light`、`heavy`、`special`、`hit`、`block`、`ko` に合わせます。PNGスプライトJSON方式とArmature骨格JSON方式は、同じ `animation_asset` 列から読み込めますが、1キャラクターにつきどちらか1方式を選んでください。
+Blenderでは正面視点を `X=横、Z=縦` とし、Action名を `idle`、`walk`、`jump`、`light`、`heavy`、`special`、`hit`、`block`、`crouchBlock`、`ko` に合わせます。`crouchBlock`を省略した場合は`block`を再生します。PNGスプライトJSON方式とArmature骨格JSON方式は、同じ `animation_asset` 列から読み込めますが、1キャラクターにつきどちらか1方式を選んでください。

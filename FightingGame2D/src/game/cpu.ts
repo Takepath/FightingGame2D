@@ -3,80 +3,53 @@ import {
   type FighterState,
   type ProjectileState,
 } from "./simulation";
-import { type FrameInput, InputButton } from "./types";
+import { type CpuCharacterSettings, FIGHTING_GAME_CONFIG } from "./gameConfig";
+import {
+  type CommandDefinition,
+  type CommandDirection,
+  type FrameInput,
+  InputButton,
+  type MoveDefinition,
+} from "./types";
 
 /** ローカル対戦で選択できるCPU難易度。 */
 export type CpuLevel = 0 | 1 | 2 | 3;
 
-/**
- * レベル3の行動をキャラクターごとに調整するテンプレート。
- *
- * `characters.csv` の `id` と同じキーを追加すれば、新キャラクターにも
- * 距離感・攻撃頻度・飛び道具使用頻度を個別に設定できる。
- */
-export interface CpuCharacterTemplate {
-  /** 最も戦いやすいと判断する相手との距離（ゲーム内ピクセル）。 */
-  preferredDistance: number;
-  /** この距離より近い場合に、防御しながら距離を取る。 */
-  retreatDistance: number;
-  /** 強攻撃を選ぶ最大距離。 */
-  heavyRange: number;
-  /** 波動拳を使い始める最小距離。 */
-  specialDistance: number;
-  /** 波動拳を試行するフレーム間隔。小さいほど積極的。 */
-  specialInterval: number;
-  /** 近接攻撃を試行するフレーム間隔。小さいほど強気。 */
-  attackInterval: number;
-  /** 飛び道具を後ろ入力でガードし始める距離。 */
-  blockDistance: number;
-}
-
-/**
- * レベル3用のキャラクター別CPUテンプレート。
- * 新キャラクターを追加する場合は、このオブジェクトへCSVのidをキーとして追加する。
- */
-export const CPU_CHARACTER_TEMPLATES: Readonly<
-  Record<string, CpuCharacterTemplate>
-> = {
-  default: {
-    preferredDistance: 142,
-    retreatDistance: 72,
-    heavyRange: 136,
-    specialDistance: 280,
-    specialInterval: 180,
-    attackInterval: 28,
-    blockDistance: 330,
-  },
-  blender_hero: {
-    preferredDistance: 166,
-    retreatDistance: 76,
-    heavyRange: 152,
-    specialDistance: 250,
-    specialInterval: 132,
-    attackInterval: 24,
-    blockDistance: 360,
-  },
-  stick_rival: {
-    preferredDistance: 124,
-    retreatDistance: 62,
-    heavyRange: 142,
-    specialDistance: 310,
-    specialInterval: 196,
-    attackInterval: 20,
-    blockDistance: 310,
-  },
-};
+/** gameConfig.tsへ集約した、レベル3用キャラクター別CPUテンプレート。 */
+const CPU_CHARACTER_TEMPLATES = FIGHTING_GAME_CONFIG.cpu.characters;
+/** 難易度共通の距離・判断周期。 */
+const CPU_LEVEL_SETTINGS = FIGHTING_GAME_CONFIG.cpu.levels;
 
 /** CPUがP2の入力フレームを作るコントローラー。 */
 export class CpuController {
-  /** 波動拳コマンドの入力段階。0以外ならコマンドを最後まで入力する。 */
-  private hadokenStep = 0;
+  /** CSVコマンドから生成した、残りの方向・攻撃入力列。 */
+  private commandInputQueue: number[] = [];
 
-  public constructor(private readonly level: CpuLevel) {}
+  /** 直前のsample呼び出しがコマンド入力列の1フレームだったか。 */
+  private sampledCommandFrame = false;
+
+  /** トレーニングCPUが移動入力を混ぜないための読み取り専用状態。 */
+  public get didSampleCommandFrame(): boolean {
+    return this.sampledCommandFrame;
+  }
+
+  /** コマンドIDを毎判断時に配列走査しないための索引。 */
+  private readonly commandsById: ReadonlyMap<string, CommandDefinition>;
+
+  public constructor(
+    private readonly level: CpuLevel,
+    private readonly moves: readonly MoveDefinition[] = [],
+    commands: readonly CommandDefinition[] = [],
+  ) {
+    this.commandsById = new Map(
+      commands.map((command) => [command.id, command]),
+    );
+  }
 
   /** コマンド技の途中入力を破棄し、次の判断を最初から始める。 */
   public reset(): void {
-    this.hadokenStep = 0;
+    this.commandInputQueue.length = 0;
+    this.sampledCommandFrame = false;
   }
 
   /**
@@ -88,13 +61,15 @@ export class CpuController {
     self: FighterState,
     opponent: FighterState,
   ): FrameInput {
+    this.sampledCommandFrame = false;
     if (self.action === "ko" || self.stun > 0 || self.activeMoveId) {
-      this.hadokenStep = 0;
+      this.commandInputQueue.length = 0;
       return { buttons: 0 };
     }
 
-    if (this.hadokenStep > 0) {
-      return { buttons: this.continueHadoken(self) };
+    if (this.commandInputQueue.length > 0) {
+      this.sampledCommandFrame = true;
+      return { buttons: this.continueCommand() };
     }
 
     const distance = Math.abs(self.x - opponent.x) / POSITION_SCALE;
@@ -105,7 +80,7 @@ export class CpuController {
       distance >= template.specialDistance &&
       frame % template.specialInterval === 0
     ) {
-      return { buttons: this.startHadoken() };
+      return { buttons: this.startCommandMove(self, template) };
     }
     return {
       buttons: this.levelThreeAttackInput(
@@ -128,18 +103,20 @@ export class CpuController {
     opponent: FighterState,
     projectiles: readonly ProjectileState[],
   ): FrameInput {
+    this.sampledCommandFrame = false;
     if (
       this.level === 0 ||
       self.action === "ko" ||
       self.stun > 0 ||
       self.activeMoveId
     ) {
-      this.hadokenStep = 0;
+      this.commandInputQueue.length = 0;
       return { buttons: 0 };
     }
 
-    if (this.hadokenStep > 0) {
-      return { buttons: this.continueHadoken(self) };
+    if (this.commandInputQueue.length > 0) {
+      this.sampledCommandFrame = true;
+      return { buttons: this.continueCommand() };
     }
 
     const distance = Math.abs(self.x - opponent.x) / POSITION_SCALE;
@@ -169,8 +146,11 @@ export class CpuController {
     self: FighterState,
     distance: number,
   ): number {
-    if (distance > 118) return this.toward(self);
-    if (frame % 54 === 0) return this.toward(self) | InputButton.Light;
+    const settings = CPU_LEVEL_SETTINGS.one;
+    if (distance > settings.approachDistance) return this.toward(self);
+    if (frame % settings.attackInterval === 0) {
+      return this.toward(self) | InputButton.Light;
+    }
     return 0;
   }
 
@@ -181,15 +161,29 @@ export class CpuController {
     distance: number,
     projectiles: readonly ProjectileState[],
   ): number {
+    const settings = CPU_LEVEL_SETTINGS.two;
     if (this.hasIncomingProjectile(self, projectiles)) {
       return this.away(self);
     }
-    if (distance > 164) return this.toward(self);
-    if (distance < 72 && frame % 42 < 14) {
+    if (distance > settings.approachDistance) return this.toward(self);
+    if (
+      distance < settings.retreatDistance &&
+      frame % settings.retreatCycleFrames < settings.retreatInputFrames
+    ) {
       return this.away(self);
     }
-    if (distance <= 140 && frame % 78 === 0) return InputButton.Heavy;
-    if (distance <= 118 && frame % 34 === 0) return InputButton.Light;
+    if (
+      distance <= settings.heavyRange &&
+      frame % settings.heavyInterval === 0
+    ) {
+      return InputButton.Heavy;
+    }
+    if (
+      distance <= settings.lightRange &&
+      frame % settings.lightInterval === 0
+    ) {
+      return InputButton.Light;
+    }
     return 0;
   }
 
@@ -212,9 +206,12 @@ export class CpuController {
       distance >= template.specialDistance &&
       frame % template.specialInterval === 0
     ) {
-      return this.startHadoken();
+      return this.startCommandMove(self, template);
     }
-    if (distance > template.preferredDistance + 22) return this.toward(self);
+    const levelSettings = CPU_LEVEL_SETTINGS.three;
+    if (distance > template.preferredDistance + levelSettings.approachMargin) {
+      return this.toward(self);
+    }
     const attackButtons = this.levelThreeAttackInput(
       frame,
       self,
@@ -225,7 +222,10 @@ export class CpuController {
     // 押し込み判定が重なる密着距離では、Lv3 が通常技より投げを優先する。
     if (attackButtons !== 0) return attackButtons;
     if (distance < template.retreatDistance) {
-      return frame % 32 < 20 ? this.away(self) : 0;
+      return frame % levelSettings.retreatCycleFrames <
+        levelSettings.retreatInputFrames
+        ? this.away(self)
+        : 0;
     }
     return attackButtons;
   }
@@ -236,9 +236,12 @@ export class CpuController {
     self: FighterState,
     opponent: FighterState,
     distance: number,
-    template: CpuCharacterTemplate,
+    template: CpuCharacterSettings,
   ): number {
-    if (distance > template.preferredDistance + 22) return 0;
+    const levelSettings = CPU_LEVEL_SETTINGS.three;
+    if (distance > template.preferredDistance + levelSettings.approachMargin) {
+      return 0;
+    }
     if (
       this.isThrowRange(self, opponent) &&
       frame % template.attackInterval === 0
@@ -252,7 +255,14 @@ export class CpuController {
     ) {
       return InputButton.Heavy;
     }
-    if (frame % Math.max(14, template.attackInterval - 6) === 0) {
+    if (
+      frame %
+        Math.max(
+          levelSettings.minimumLightInterval,
+          template.attackInterval - levelSettings.lightIntervalOffset,
+        ) ===
+      0
+    ) {
       return InputButton.Light;
     }
     return 0;
@@ -260,10 +270,13 @@ export class CpuController {
 
   /** シミュレーションの投げ可能距離と同じ、押し込み判定の重なりを確認する。 */
   private isThrowRange(self: FighterState, opponent: FighterState): boolean {
-    const verticalRange = 96 * POSITION_SCALE;
+    const throwMove = this.throwMoveForCharacter(self);
+    if (!throwMove) return false;
+    const verticalRange = throwMove.rangeY * POSITION_SCALE;
     const horizontalRange =
       ((self.character.hurtboxWidth + opponent.character.hurtboxWidth) / 2 +
-        16) *
+        FIGHTING_GAME_CONFIG.match.physics.pushboxPadding * 2 +
+        throwMove.rangeX) *
       POSITION_SCALE;
     return (
       Math.abs(self.y - opponent.y) < verticalRange &&
@@ -271,21 +284,129 @@ export class CpuController {
     );
   }
 
-  /** 波動拳コマンドの最初の「下」入力を開始する。 */
-  private startHadoken(): number {
-    this.hadokenStep = 1;
-    return InputButton.Down;
+  /** CPUテンプレートとmoves/commands.csvから、実行するコマンド技を選ぶ。 */
+  private startCommandMove(
+    self: FighterState,
+    template: CpuCharacterSettings,
+  ): number {
+    const move = this.commandMoveFor(self, template.specialMoveId);
+    const command = move ? this.commandForMove(move) : undefined;
+    if (!move || !command) {
+      // 未定義技へ暗黙の波動拳入力を割り当てず、CSVを唯一の技定義として扱う。
+      this.commandInputQueue.length = 0;
+      return 0;
+    }
+    this.commandInputQueue = this.commandInputs(self, move, command);
+    this.sampledCommandFrame = true;
+    return this.continueCommand();
   }
 
-  /** 「下 → 下前 → 前＋必殺」を固定3フレームで入力する。 */
-  private continueHadoken(self: FighterState): number {
-    const forward = this.toward(self);
-    if (this.hadokenStep === 1) {
-      this.hadokenStep = 2;
-      return InputButton.Down | forward;
+  /** 現在キャラクター用の固有技を優先し、指定IDまたは利用可能なコマンド技を返す。 */
+  private commandMoveFor(
+    self: FighterState,
+    preferredMoveId: string | undefined,
+  ): MoveDefinition | undefined {
+    // simulationと同じく、同名IDはCSV行順に関係なくキャラクター固有行で上書きする。
+    const effectiveMoves = new Map<string, MoveDefinition>();
+    for (const move of this.moves) {
+      if (move.characterId === "all" && !effectiveMoves.has(move.id)) {
+        effectiveMoves.set(move.id, move);
+      }
     }
-    this.hadokenStep = 0;
-    return forward | InputButton.Special;
+    for (const move of this.moves) {
+      if (move.characterId === self.character.id) {
+        effectiveMoves.set(move.id, move);
+      }
+    }
+    const usable = [...effectiveMoves.values()].filter(
+      (move) =>
+        move.commandIds.length > 0 &&
+        move.specialGaugeCost <= self.specialGauge &&
+        (move.useState === "ground" || move.useState === "any"),
+    );
+    if (preferredMoveId) {
+      const preferred = usable.find((move) => move.id === preferredMoveId);
+      if (preferred) return preferred;
+    }
+    return (
+      usable.find((move) => move.characterId === self.character.id) ?? usable[0]
+    );
+  }
+
+  /** 複数の簡易コマンドがある場合は、優先度・入力長の順でCPU入力を選ぶ。 */
+  private commandForMove(move: MoveDefinition): CommandDefinition | undefined {
+    return move.commandIds
+      .map((id) => this.commandsById.get(id))
+      .filter((command): command is CommandDefinition => Boolean(command))
+      .sort(
+        (left, right) =>
+          right.priority - left.priority ||
+          right.sequence.length - left.sequence.length,
+      )[0];
+  }
+
+  /** テンキー方向を現在の向きへ変換し、溜め時間を含む固定フレーム入力列を作る。 */
+  private commandInputs(
+    self: FighterState,
+    move: MoveDefinition,
+    command: CommandDefinition,
+  ): number[] {
+    const inputs: number[] = [];
+    command.sequence.forEach((direction, index) => {
+      const directionInput = this.directionInput(self, direction);
+      const repeats =
+        index === 0 && command.chargeFrames > 0 ? command.chargeFrames : 1;
+      for (let repeat = 0; repeat < repeats; repeat += 1) {
+        inputs.push(directionInput);
+      }
+    });
+    if (inputs.length === 0) return [move.button];
+    inputs[inputs.length - 1] |= move.button;
+    return inputs;
+  }
+
+  /** CSVのテンキー方向を、CPU自身の前後方向を基準にした入力ビットへ変換する。 */
+  private directionInput(
+    self: FighterState,
+    direction: CommandDirection,
+  ): number {
+    const forward = this.toward(self);
+    const backward = this.away(self);
+    const horizontal =
+      direction === "1" || direction === "4" || direction === "7"
+        ? backward
+        : direction === "3" || direction === "6" || direction === "9"
+          ? forward
+          : 0;
+    const vertical =
+      direction === "1" || direction === "2" || direction === "3"
+        ? InputButton.Down
+        : direction === "7" || direction === "8" || direction === "9"
+          ? InputButton.Up
+          : 0;
+    return horizontal | vertical;
+  }
+
+  /** 生成済みコマンド列から次の1フレーム分を返す。 */
+  private continueCommand(): number {
+    return this.commandInputQueue.shift() ?? 0;
+  }
+
+  /** move_idへ依存せず、固有定義を優先して地上で使える投げ技を返す。 */
+  private throwMoveForCharacter(
+    self: FighterState,
+  ): MoveDefinition | undefined {
+    const isGroundThrow = (move: MoveDefinition): boolean =>
+      move.button === InputButton.Throw &&
+      (move.useState === "ground" || move.useState === "any");
+    return (
+      this.moves.find(
+        (move) => move.characterId === self.character.id && isGroundThrow(move),
+      ) ??
+      this.moves.find(
+        (move) => move.characterId === "all" && isGroundThrow(move),
+      )
+    );
   }
 
   /** 相手方向の左右入力を返す。 */
@@ -303,8 +424,6 @@ export class CpuController {
     self: FighterState,
     projectiles: readonly ProjectileState[],
   ): boolean {
-    const horizontalReach =
-      (self.character.hurtboxWidth / 2 + 14) * POSITION_SCALE;
     const hurtboxTop = self.y - self.character.hurtboxTop * POSITION_SCALE;
     const hurtboxBottom =
       self.y - self.character.hurtboxBottom * POSITION_SCALE;
@@ -312,10 +431,13 @@ export class CpuController {
       if (projectile.owner === self.player) return false;
 
       const nextX = projectile.x + projectile.velocityX;
+      const horizontalReach =
+        (self.character.hurtboxWidth / 2) * POSITION_SCALE +
+        projectile.hitboxRadius;
       return (
         Math.abs(nextX - self.x) <= horizontalReach &&
-        projectile.y >= hurtboxTop &&
-        projectile.y <= hurtboxBottom
+        projectile.y + projectile.hitboxRadius >= hurtboxTop &&
+        projectile.y - projectile.hitboxRadius <= hurtboxBottom
       );
     });
   }

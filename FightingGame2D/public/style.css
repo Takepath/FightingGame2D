@@ -55,6 +55,54 @@ input {
   display: none !important;
 }
 
+/* 設定ミスを黒画面にせず、ファイル・行・列をそのまま確認できる起動エラー。 */
+.startup-error {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  box-sizing: border-box;
+  background: #080d1cf2;
+}
+
+.startup-error-card {
+  width: min(760px, 100%);
+  border: 1px solid #ff7185;
+  border-radius: 14px;
+  padding: 24px;
+  box-sizing: border-box;
+  color: #f8fbff;
+  background: #171124;
+  box-shadow: 0 18px 70px #000a;
+}
+
+.startup-error-card h1 {
+  margin: 0 0 10px;
+  color: #ff91a1;
+}
+
+.startup-error-card p {
+  margin: 0 0 16px;
+  color: #c9d7e8;
+}
+
+.startup-error-card pre {
+  overflow: auto;
+  max-height: 50vh;
+  margin: 0;
+  border-radius: 8px;
+  padding: 14px;
+  color: #ffe8ad;
+  background: #080b15;
+  font:
+    14px/1.6 Consolas,
+    "Yu Gothic UI",
+    monospace;
+  white-space: pre-wrap;
+}
+
 #top-menu {
   background: linear-gradient(135deg, #80dc8d 0%, #75d997 54%, #4ab88d 100%);
 }

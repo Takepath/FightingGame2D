@@ -231,14 +231,24 @@
           <button id="match-character-select" type="button">
             キャラクター選択
           </button>
-          <button
-            id="match-top"
-            type="button"
-            class="pause-top-button"
-          >
+          <button id="match-top" type="button" class="pause-top-button">
             Top画面へ
           </button>
         </div>
+      </div>
+    </section>
+
+    <!-- CSV・設定・アセットの起動エラーを、黒画面ではなく編集箇所付きで表示する。 -->
+    <section
+      id="startup-error"
+      class="startup-error is-hidden"
+      role="alert"
+      aria-live="assertive"
+    >
+      <div class="startup-error-card">
+        <h1>ゲームを開始できませんでした</h1>
+        <p>CSV・gameConfig.ts・アセットパスを確認してください。</p>
+        <pre id="startup-error-message"></pre>
       </div>
     </section>
     <script type="module" src="/src/main.ts"></script>

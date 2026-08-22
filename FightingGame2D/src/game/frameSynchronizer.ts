@@ -14,16 +14,12 @@ export class FrameSynchronizer {
   /** 現在のシミュレーションフレーム番号。 */
   public frame = 0;
 
-  /** 入力を複製してからシミュレーションを1フレーム進める。 */
+  /** 読み取り専用の入力をそのまま渡し、固定フレームごとの不要な複製を避ける。 */
   public advance(
     simulation: DeterministicSimulation,
     inputs: readonly [FrameInput, FrameInput],
   ): void {
-    const snapshot: readonly [FrameInput, FrameInput] = [
-      { buttons: inputs[0].buttons },
-      { buttons: inputs[1].buttons },
-    ];
-    simulation.step(snapshot);
+    simulation.step(inputs);
     this.frame += 1;
   }
 

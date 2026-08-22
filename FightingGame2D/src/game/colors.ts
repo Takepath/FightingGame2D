@@ -1,4 +1,5 @@
 import type { CharacterDefinition, ColorVariant } from "./types";
+import { FIGHTING_GAME_CONFIG } from "./gameConfig";
 
 /** カラー選択画面に表示する1種類の色設定。 */
 export interface ColorOption {
@@ -9,23 +10,11 @@ export interface ColorOption {
 }
 
 /** カラーの自動ずらしにも使う、選択肢の固定順序。 */
-export const COLOR_VARIANTS: readonly ColorVariant[] = [
-  "default",
-  "black",
-  "red",
-  "yellow",
-  "white",
-];
+export const COLOR_VARIANTS: readonly ColorVariant[] =
+  FIGHTING_GAME_CONFIG.colorSelect.order;
 
 /** CSVのキャラクター色以外で使う共通カラーパレット。 */
-const FIXED_COLOR_OPTIONS: Readonly<
-  Record<Exclude<ColorVariant, "default">, Omit<ColorOption, "id">>
-> = {
-  black: { label: "黒系", primaryColor: 0x1b2432, accentColor: 0x7d8ba1 },
-  red: { label: "赤系", primaryColor: 0xcf354a, accentColor: 0xffb0b7 },
-  yellow: { label: "黄色系", primaryColor: 0xe1b71b, accentColor: 0xfff1a2 },
-  white: { label: "白系", primaryColor: 0xeaf0fa, accentColor: 0x788cae },
-};
+const FIXED_COLOR_OPTIONS = FIGHTING_GAME_CONFIG.colorSelect.palette;
 
 /** 指定キャラクターで選べる5色を、表示に必要な色値とラベルへ解決する。 */
 export function colorOptionsFor(
