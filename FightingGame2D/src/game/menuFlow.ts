@@ -80,7 +80,7 @@ export class MenuFlow {
   private localChoice: PlayerSelection | null = null;
   /** オンライン相手から受信したカラーまで含む選択結果。 */
   private remoteChoice: PlayerSelection | null = null;
-  /** ローカル対戦でP2へ割り当てるCPU難易度。 */
+  /** ローカル対戦でP2へ割り当てるCPU難易度（0はP2を人間が操作）。 */
   private cpuLevel: CpuLevel = 1;
   private matchStarting = false;
   /** VS画面の表示を終了して対戦へ進めるためのタイマー。 */
@@ -439,7 +439,7 @@ export class MenuFlow {
         ? "相手もキャラクターとカラーを選択するまで待機します。"
         : this.mode === "training"
           ? "選択後、トレーニング対戦を開始します。"
-          : `CPU LEVELを選択してから、キャラクターを決定してください。`;
+          : this.localCharacterSelectStatus();
     this.setCharacterBackLabel(false);
   }
 
@@ -460,8 +460,15 @@ export class MenuFlow {
       button.setAttribute("aria-pressed", String(selected));
     });
     if (this.mode === "local") {
-      this.characterStatus.textContent = `CPU LEVELを選択してから、キャラクターを決定してください。`;
+      this.characterStatus.textContent = this.localCharacterSelectStatus();
     }
+  }
+
+  /** CPUレベル0と1～3で異なるローカル対戦の説明文を生成する。 */
+  private localCharacterSelectStatus(): string {
+    return this.cpuLevel === 0
+      ? "CPU LEVEL 0: P2を操作するローカル対戦です。キャラクターを決定してください。"
+      : "CPU LEVELを選択してから、キャラクターを決定してください。";
   }
 
   /** オンライン両者の選択が揃った時だけ、プレイヤー番号順の組み合わせで始める。 */

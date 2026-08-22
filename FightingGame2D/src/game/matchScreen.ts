@@ -450,8 +450,10 @@ export class MatchScreen extends Container {
       this.training,
       data.projectileDefinitions,
     );
+    // CPUレベル0はP2を人間が操作するローカル対戦として扱う。
+    // CPUコントローラーを生成しないことで、更新処理ではP2用入力設定を読む。
     this.cpu =
-      this.cpuLevel === null
+      this.cpuLevel === null || this.cpuLevel === 0
         ? null
         : new CpuController(this.cpuLevel, data.moves, data.commands);
     this.trainingCpu = this.training
@@ -1710,6 +1712,9 @@ export class MatchScreen extends Container {
     if (this.training && !this.online) {
       infoText =
         "TRAINING  •  後ろ: 立ちガード / ↓+後ろ: しゃがみガード  •  空中攻撃";
+    } else if (this.cpuLevel === 0 && !this.online) {
+      infoText =
+        "LOCAL VS  •  P1/P2を操作  •  後ろ: 立ちガード / ↓+後ろ: しゃがみガード";
     } else if (this.cpuLevel !== null && !this.online) {
       infoText = `CPU LEVEL ${this.cpuLevel}  •  後ろ: 立ちガード / ↓+後ろ: しゃがみガード`;
     }
