@@ -222,7 +222,7 @@ function defaultRoomEndpoint(): string {
   return `${protocol}://${window.location.host}/room`;
 }
 
-/** P1・P2で共通利用するXbox標準配置を、参照共有せず設定へ展開する。 */
+/** P1・P2で共通利用するStandard Gamepad配置を、参照共有せず設定へ展開する。 */
 const DEFAULT_GAMEPAD_PLAYER_BINDINGS = {
   left: ["axis:0:-1", "button:14"],
   right: ["axis:0:1", "button:15"],

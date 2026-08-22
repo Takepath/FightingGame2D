@@ -8,7 +8,6 @@ import { FighterView } from "./fighterView";
 import {
   FIXED_CANCEL_KEY_CODE,
   formatGamepadBinding,
-  formatKeyboardCode,
   gamepadConfig,
   getKeyboardActionDefinition,
   InputManager,
@@ -850,7 +849,7 @@ export class MatchScreen extends Container {
     this.handleCancelInput();
   };
 
-  /** Esc と Xbox Home に共通するキャンセル・一時停止の遷移を処理する。 */
+  /** Esc とStandard GamepadのHomeに共通するキャンセル・一時停止の遷移を処理する。 */
   private handleCancelInput(): void {
     if (this.keyBindingTarget) {
       this.stopKeyBinding();
@@ -913,7 +912,7 @@ export class MatchScreen extends Container {
     return !this.pauseMenuOptions.classList.contains("is-hidden");
   }
 
-  /** 現在のキー配置から、P1・P2の設定ボタンを生成する。 */
+  /** 現在の統合入力配置から、P1・P2の設定ボタンを生成する。 */
   private renderKeyConfig(): void {
     this.keyConfigList.replaceChildren();
 
@@ -935,62 +934,29 @@ export class MatchScreen extends Container {
         const actionLabel = document.createElement("span");
         actionLabel.textContent = label;
 
-        const keyButton = document.createElement("button");
-        keyButton.type = "button";
-        keyButton.className = "key-config-binding";
-        keyButton.textContent = formatKeyboardCode(
+        const inputButton = document.createElement("button");
+        inputButton.type = "button";
+        inputButton.className = "key-config-binding";
+        // キーボードコードとGamepad APIの生入力を1つの設定ボタンへ並べて表示する。
+        inputButton.textContent = [
           keyboardConfig.getBinding(player, action),
-        );
-        keyButton.setAttribute(
+          ...gamepadConfig
+            .getBindings(player, action)
+            .map(formatGamepadBinding),
+        ].join(" / ");
+        inputButton.setAttribute(
           "aria-label",
-          `PLAYER ${player + 1}の${label}: ${keyButton.textContent}`,
+          `PLAYER ${player + 1}の${label}: ${inputButton.textContent}`,
         );
-        keyButton.addEventListener("click", () =>
-          this.startKeyBinding({ player, action }, keyButton),
+        inputButton.addEventListener("click", () =>
+          this.startKeyBinding({ player, action }, inputButton),
         );
 
-        row.append(actionLabel, keyButton);
+        row.append(actionLabel, inputButton);
         bindings.append(row);
       }
 
-      // Xbox はキーボードと別の保存設定を表示し、同じ待機操作で再割り当てする。
-      const gamepadSection = document.createElement("div");
-      gamepadSection.className = "key-config-gamepad";
-
-      const gamepadHeading = document.createElement("h3");
-      gamepadHeading.textContent = "XBOX CONTROLLER";
-      gamepadSection.append(gamepadHeading);
-
-      const gamepadBindings = document.createElement("div");
-      gamepadBindings.className = "key-config-bindings";
-      for (const { action, label } of KEYBOARD_ACTIONS) {
-        const row = document.createElement("div");
-        row.className = "key-config-row";
-
-        const actionLabel = document.createElement("span");
-        actionLabel.textContent = label;
-
-        const gamepadButton = document.createElement("button");
-        gamepadButton.type = "button";
-        gamepadButton.className = "key-config-binding";
-        gamepadButton.textContent = gamepadConfig
-          .getBindings(player, action)
-          .map(formatGamepadBinding)
-          .join(" / ");
-        gamepadButton.setAttribute(
-          "aria-label",
-          `PLAYER ${player + 1}の${label}: ${gamepadButton.textContent}`,
-        );
-        gamepadButton.addEventListener("click", () =>
-          this.startKeyBinding({ player, action }, gamepadButton),
-        );
-
-        row.append(actionLabel, gamepadButton);
-        gamepadBindings.append(row);
-      }
-
-      gamepadSection.append(gamepadBindings);
-      group.append(bindings, gamepadSection);
+      group.append(bindings);
       this.keyConfigList.append(group);
     }
   }
@@ -1006,7 +972,7 @@ export class MatchScreen extends Container {
     this.input.beginGamepadBindingCapture(target.player);
 
     const definition = getKeyboardActionDefinition(target.action);
-    this.keyConfigStatus.textContent = `P${target.player + 1}の「${definition.label}」に割り当てるキーまたは Xbox コントローラーの入力を押してください。Esc または Home でキャンセルします。`;
+    this.keyConfigStatus.textContent = `P${target.player + 1}の「${definition.label}」に割り当てるキーまたはコントローラー入力を押してください。Esc または Home でキャンセルします。`;
     window.addEventListener("keydown", this.captureKeyBinding, true);
     button.focus();
   }
@@ -1029,17 +995,12 @@ export class MatchScreen extends Container {
     const result = keyboardConfig.assign(target, event.code);
     if (result.ok) {
       const definition = getKeyboardActionDefinition(target.action);
-      const keyName = formatKeyboardCode(event.code);
+      const swapped = result.swappedTarget
+        ? ` と ${this.keyConfigTargetLabel(result.swappedTarget)}の入力を交換しました。`
+        : " に設定しました。";
       this.stopKeyBinding();
       this.renderKeyConfig();
-      this.keyConfigStatus.textContent = `P${target.player + 1}の「${definition.label}」を ${keyName} に設定しました。`;
-      return;
-    }
-
-    if (result.reason === "duplicate" && result.conflictingTarget) {
-      const conflicting = result.conflictingTarget;
-      const definition = getKeyboardActionDefinition(conflicting.action);
-      this.keyConfigStatus.textContent = `${formatKeyboardCode(event.code)} は P${conflicting.player + 1}の「${definition.label}」に設定済みです。別のキーを押してください。`;
+      this.keyConfigStatus.textContent = `P${target.player + 1}の「${definition.label}」を ${event.code}${swapped}`;
       return;
     }
 
@@ -1047,7 +1008,7 @@ export class MatchScreen extends Container {
       "Escと修飾キーは割り当てできません。別のキーを押してください。";
   };
 
-  /** キーコンフィグ待機中の Xbox コントローラー入力を処理する。 */
+  /** キーコンフィグ待機中の、Gamepad API対応コントローラー入力を処理する。 */
   private captureGamepadBinding(): void {
     const target = this.keyBindingTarget;
     if (!target) return;
@@ -1056,25 +1017,18 @@ export class MatchScreen extends Container {
     if (!binding) return;
 
     const result = gamepadConfig.assign(target, binding);
-    if (result.ok) {
-      const definition = getKeyboardActionDefinition(target.action);
-      const bindingName = formatGamepadBinding(binding);
-      this.stopKeyBinding();
-      this.renderKeyConfig();
-      this.keyConfigStatus.textContent = `P${target.player + 1}の「${definition.label}」を ${bindingName} に設定しました。`;
-      return;
-    }
+    const definition = getKeyboardActionDefinition(target.action);
+    const swapped = result.swappedTarget
+      ? ` と ${this.keyConfigTargetLabel(result.swappedTarget)}の入力を交換しました。`
+      : " に設定しました。";
+    this.stopKeyBinding();
+    this.renderKeyConfig();
+    this.keyConfigStatus.textContent = `P${target.player + 1}の「${definition.label}」を ${formatGamepadBinding(binding)}${swapped}`;
+  }
 
-    if (result.reason === "duplicate" && result.conflictingTarget) {
-      const definition = getKeyboardActionDefinition(
-        result.conflictingTarget.action,
-      );
-      this.keyConfigStatus.textContent = `${formatGamepadBinding(binding)} は P${result.conflictingTarget.player + 1}の「${definition.label}」に設定済みです。別の入力を押してください。`;
-      return;
-    }
-
-    this.keyConfigStatus.textContent =
-      "Home は Esc と同じ固定キャンセル操作のため、割り当てできません。";
+  /** 交換先を含めた、キーコンフィグの操作名を返す。 */
+  private keyConfigTargetLabel(target: KeyBindingTarget): string {
+    return `P${target.player + 1}の「${getKeyboardActionDefinition(target.action).label}」`;
   }
 
   /** キー入力待機を終了し、イベント監視と見た目を元に戻す。 */
@@ -1094,7 +1048,7 @@ export class MatchScreen extends Container {
     gamepadConfig.reset();
     this.renderKeyConfig();
     this.keyConfigStatus.textContent =
-      "キーボードと Xbox コントローラーの配置を初期設定に戻しました。";
+      "キーボードとコントローラーの配置を初期設定に戻しました。";
     this.keyConfigResetButton.focus();
   };
 

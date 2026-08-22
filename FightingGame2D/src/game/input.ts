@@ -8,7 +8,7 @@ import {
 /** Escは常にキャンセルに使うため、キーコンフィグの対象外とする。 */
 export const FIXED_CANCEL_KEY_CODE = "Escape";
 
-/** Xbox コントローラーの Home（Guide）ボタンは Esc と同じキャンセル操作に固定する。 */
+/** Standard Gamepad APIのHome相当ボタンはEscと同じキャンセル操作に固定する。 */
 export const FIXED_CANCEL_GAMEPAD_BUTTON_INDEX = 16;
 
 /** キーコンフィグで変更できるキーボード操作の識別子。 */
@@ -48,16 +48,15 @@ export interface KeyBindingTarget {
  */
 export type GamepadBinding = ConfiguredGamepadBinding;
 
-/** キーの重複・予約キーなど、割り当て不可の理由。 */
-export type KeyBindingFailure = "reserved" | "modifier" | "duplicate";
+/** キーの予約・修飾キーなど、割り当て不可の理由。 */
+export type KeyBindingFailure = "reserved" | "modifier";
 
 /** キー割り当て処理の結果。 */
 export type KeyBindingResult =
-  | { readonly ok: true }
+  | { readonly ok: true; readonly swappedTarget?: KeyBindingTarget }
   | {
       readonly ok: false;
       readonly reason: KeyBindingFailure;
-      readonly conflictingTarget?: KeyBindingTarget;
     };
 
 type KeyboardBindings = Record<PlayerId, Record<KeyboardAction, string>>;
@@ -86,7 +85,7 @@ const parsedGamepadBindingCache = new Map<
 /** ブラウザに保存するキーコンフィグのキー。 */
 const KEYBOARD_CONFIG_STORAGE_KEY = "fighting-game-2d.keyboard-config.v2";
 
-/** ブラウザーに保存する Xbox コントローラー設定のキー。 */
+/** ブラウザーに保存する汎用コントローラー設定のキー。 */
 const GAMEPAD_CONFIG_STORAGE_KEY = "fighting-game-2d.gamepad-config.v1";
 
 /** プレイヤー番号を安全に走査するための定数。 */
@@ -108,7 +107,7 @@ const MODIFIER_KEY_CODES = new Set([
 const DEFAULT_KEYBOARD_BINDINGS = FIGHTING_GAME_CONFIG.input.keyboardDefaults;
 
 /**
- * Xbox コントローラーの初期配置。
+ * Standard Gamepad API向けの初期配置。
  * 十字キーと左スティックを両方使えるよう、移動には二つの入力を登録する。
  */
 const DEFAULT_GAMEPAD_BINDINGS = FIGHTING_GAME_CONFIG.input.gamepadDefaults;
@@ -147,11 +146,6 @@ function isGamepadBinding(value: unknown): value is GamepadBinding {
   if (typeof value !== "string") return false;
   if (/^button:\d+$/.test(value)) return true;
   return /^axis:\d+:(-1|1)$/.test(value);
-}
-
-/** 指定したゲームパッド識別子が固定キャンセル用の Home ボタンかを確認する。 */
-function isFixedCancelGamepadBinding(binding: GamepadBinding): boolean {
-  return binding === `button:${FIXED_CANCEL_GAMEPAD_BUTTON_INDEX}`;
 }
 
 /**
@@ -242,11 +236,7 @@ function migrateGamepadBindings(value: unknown): GamepadBindings | null {
       }
       const validBindings: GamepadBinding[] = [];
       for (const binding of storedBindings) {
-        if (
-          !isGamepadBinding(binding) ||
-          isFixedCancelGamepadBinding(binding) ||
-          assignedBindings.has(binding)
-        ) {
+        if (!isGamepadBinding(binding) || assignedBindings.has(binding)) {
           return null;
         }
         validBindings.push(binding);
@@ -295,27 +285,6 @@ export function isConfigurableKeyboardCode(code: string): boolean {
   );
 }
 
-/** KeyboardEvent.codeを、設定画面で読みやすい表記へ変換する。 */
-export function formatKeyboardCode(code: string): string {
-  if (code.startsWith("Key")) return code.slice(3);
-  if (code.startsWith("Digit")) return code.slice(5);
-  if (code.startsWith("Numpad")) return `テンキー ${code.slice(6)}`;
-
-  const displayNames: Record<string, string> = {
-    ArrowLeft: "←",
-    ArrowRight: "→",
-    ArrowUp: "↑",
-    ArrowDown: "↓",
-    Space: "Space",
-    Enter: "Enter",
-    Tab: "Tab",
-    Backspace: "Backspace",
-    ShiftLeft: "左Shift",
-    ShiftRight: "右Shift",
-  };
-  return displayNames[code] ?? code;
-}
-
 /**
  * キーコンフィグの状態を管理する。
  * 設定変更は同じブラウザのlocalStorageへ即時保存され、次回起動後も引き継がれる。
@@ -339,7 +308,10 @@ export class KeyboardConfig {
     return null;
   }
 
-  /** キーを操作へ割り当て、成功時はブラウザへ保存する。 */
+  /**
+   * キーを操作へ割り当て、既存の割り当てなら両操作のキーを交換して保存する。
+   * キーボードは1台を共有するため、P1・P2をまたいで交換する。
+   */
   public assign(target: KeyBindingTarget, code: string): KeyBindingResult {
     if (code === FIXED_CANCEL_KEY_CODE) {
       return { ok: false, reason: "reserved" };
@@ -348,14 +320,17 @@ export class KeyboardConfig {
       return { ok: false, reason: "modifier" };
     }
 
+    const previousCode = this.bindings[target.player][target.action];
     const existing = this.findBinding(code);
     if (
       existing &&
       (existing.player !== target.player || existing.action !== target.action)
     ) {
-      return { ok: false, reason: "duplicate", conflictingTarget: existing };
+      this.bindings[existing.player][existing.action] = previousCode;
+      this.bindings[target.player][target.action] = code;
+      this.save();
+      return { ok: true, swappedTarget: existing };
     }
-
     this.bindings[target.player][target.action] = code;
     this.save();
     return { ok: true };
@@ -385,18 +360,16 @@ export class KeyboardConfig {
 /** アプリ全体で共有するキーコンフィグ。 */
 export const keyboardConfig = new KeyboardConfig();
 
-/** ゲームパッド割り当ての変更結果。 */
-export type GamepadBindingResult =
-  | { readonly ok: true }
-  | {
-      readonly ok: false;
-      readonly reason: "reserved" | "duplicate";
-      readonly conflictingTarget?: KeyBindingTarget;
-    };
+/** コントローラー割り当ての変更結果。 */
+export interface GamepadBindingResult {
+  readonly ok: true;
+  /** すでに使われていた入力を、指定操作の従来入力と交換した相手。 */
+  readonly swappedTarget?: KeyBindingTarget;
+}
 
 /**
- * Xbox コントローラーの入力配置を管理する。
- * ゲームパッドは P1・P2 で別々の端末を使うため、重複確認は同一プレイヤー内だけで行う。
+ * Gamepad APIで取得できる、機種非依存のコントローラー入力配置を管理する。
+ * コントローラーはP1・P2で別々の端末を使うため、交換対象は同一プレイヤー内だけにする。
  */
 export class GamepadConfig {
   /** 現在有効なゲームパッド割り当て。 */
@@ -424,20 +397,32 @@ export class GamepadConfig {
   }
 
   /**
-   * 操作へゲームパッド入力を割り当てる。
-   * 変更後は選択した一つの入力だけを使い、初期状態では十字キーとスティックの両方を使える。
+   * 操作へコントローラー入力を割り当てる。
+   * 既存入力を選んだ場合は、同種（button/axis）の従来入力と交換して別操作を重複させない。
+   * 未使用入力を選んだ場合は、明示的な再設定としてその操作を単一入力へ置き換える。
    */
   public assign(
     target: KeyBindingTarget,
     binding: GamepadBinding,
   ): GamepadBindingResult {
-    if (isFixedCancelGamepadBinding(binding)) {
-      return { ok: false, reason: "reserved" };
-    }
-
     const existing = this.findBinding(target.player, binding);
     if (existing && existing.action !== target.action) {
-      return { ok: false, reason: "duplicate", conflictingTarget: existing };
+      const targetBindings = this.bindings[target.player][target.action];
+      const targetBindingIndex = this.bindingToExchange(
+        targetBindings,
+        binding,
+      );
+      const previousBinding = targetBindings[targetBindingIndex];
+      const existingBindings = this.bindings[existing.player][existing.action];
+      const existingBindingIndex = existingBindings.indexOf(binding);
+      if (!previousBinding || existingBindingIndex < 0) {
+        throw new Error("コントローラー入力の交換対象が見つかりません");
+      }
+
+      targetBindings[targetBindingIndex] = binding;
+      existingBindings[existingBindingIndex] = previousBinding;
+      this.save();
+      return { ok: true, swappedTarget: existing };
     }
 
     this.bindings[target.player][target.action] = [binding];
@@ -466,6 +451,18 @@ export class GamepadConfig {
     return buttons;
   }
 
+  /** 同じ種類の既存入力を優先し、移動のスティック／十字キー併用を保ったまま交換する。 */
+  private bindingToExchange(
+    bindings: readonly GamepadBinding[],
+    incoming: GamepadBinding,
+  ): number {
+    const incomingKind = incoming.startsWith("button:") ? "button" : "axis";
+    const sameKindIndex = bindings.findIndex((binding) =>
+      binding.startsWith(`${incomingKind}:`),
+    );
+    return sameKindIndex >= 0 ? sameKindIndex : 0;
+  }
+
   /** ゲームパッド配置をブラウザーへ保存する。 */
   private save(): void {
     try {
@@ -481,47 +478,15 @@ export class GamepadConfig {
   }
 }
 
-/** アプリ全体で共有する Xbox コントローラー設定。 */
+/** アプリ全体で共有する汎用コントローラー設定。 */
 export const gamepadConfig = new GamepadConfig();
 
-/** 操作一覧に表示するゲームパッド入力名を日本語へ変換する。 */
+/** 機種固有のボタン名へ変換せず、Gamepad APIの入力値をそのまま表示する。 */
 export function formatGamepadBinding(binding: GamepadBinding): string {
-  const buttonMatch = /^button:(\d+)$/.exec(binding);
-  if (buttonMatch) {
-    const buttonIndex = Number(buttonMatch[1]);
-    const buttonNames: Record<number, string> = {
-      0: "A",
-      1: "B",
-      2: "X",
-      3: "Y",
-      4: "LB",
-      5: "RB",
-      6: "LT",
-      7: "RT",
-      8: "VIEW",
-      9: "MENU",
-      10: "左スティック押込",
-      11: "右スティック押込",
-      12: "Dパッド ↑",
-      13: "Dパッド ↓",
-      14: "Dパッド ←",
-      15: "Dパッド →",
-      [FIXED_CANCEL_GAMEPAD_BUTTON_INDEX]: "HOME",
-    };
-    return buttonNames[buttonIndex] ?? `BUTTON ${buttonIndex}`;
-  }
-
-  const axisMatch = /^axis:(\d+):(-1|1)$/.exec(binding);
-  if (!axisMatch) return binding;
-
-  const axisIndex = Number(axisMatch[1]);
-  const direction = Number(axisMatch[2]);
-  if (axisIndex === 0) return `左スティック ${direction < 0 ? "←" : "→"}`;
-  if (axisIndex === 1) return `左スティック ${direction < 0 ? "↑" : "↓"}`;
-  return `AXIS ${axisIndex} ${direction < 0 ? "−" : "+"}`;
+  return binding;
 }
 
-/** Xboxのボタン状態を押下・アナログ入力の両方から判定する。 */
+/** コントローラーのボタン状態を、押下・アナログ入力の両方から判定する。 */
 function buttonDown(gamepad: Gamepad, index: number): boolean {
   return Boolean(
     gamepad.buttons[index]?.pressed ||
@@ -557,7 +522,7 @@ function gamepadBindingDown(
 }
 
 /**
- * キーボードとXboxゲームパッドの状態を、シミュレーション用入力へ変換する。
+ * キーボードとGamepad API対応コントローラーの状態を、シミュレーション用入力へ変換する。
  * 後ろ入力は対戦ロジック側で立ち・しゃがみガードへ解釈する。
  * 向き反転キーと左右移動キーの同時入力は、設定済みのキー配置でも向き反転として扱う。
  */
@@ -577,7 +542,7 @@ export class InputManager {
   /** Home押下の今回分を格納し、前回Setとの交換で毎フレーム割り当てを避ける。 */
   private gamepadHomeActive = new Set<number>();
 
-  /** 同じ描画更新内で共有し、Gamepad APIを何度も列挙しないスナップショット。 */
+  /** 接続順に並べたコントローラースナップショット。Gamepad APIの列挙を1回にまとめる。 */
   private readonly gamepadSnapshot: (Gamepad | null)[] = [];
 
   public constructor() {
@@ -597,7 +562,8 @@ export class InputManager {
     this.gamepadSnapshot.length = 0;
     if (typeof navigator === "undefined" || !navigator.getGamepads) return;
     for (const gamepad of navigator.getGamepads()) {
-      this.gamepadSnapshot.push(gamepad);
+      // 接続済みだけを詰め、OSが空いたindexを残してもP1操作が不能にならないようにする。
+      if (gamepad?.connected) this.gamepadSnapshot.push(gamepad);
     }
   }
 
@@ -613,7 +579,7 @@ export class InputManager {
     }
 
     const gamepad = this.gamepadForPlayer(player);
-    if (gamepad?.connected) buttons |= this.sampleXboxGamepad(player, gamepad);
+    if (gamepad?.connected) buttons |= this.sampleGamepad(player, gamepad);
 
     return { buttons };
   }
@@ -649,7 +615,8 @@ export class InputManager {
 
   /**
    * 割り当て待機中に新しく押されたゲームパッド入力を一つ取得する。
-   * Home は Esc と同じ固定操作なので、ここでは割り当て対象にしない。
+   * Standard mappingのHomeはEscと同じ固定操作なので、ここでは割り当て対象にしない。
+   * 非standard機器は各ボタン番号をそのまま登録できる。
    */
   public consumeGamepadBindingCapture(): GamepadBinding | null {
     const player = this.gamepadCapturePlayer;
@@ -662,15 +629,15 @@ export class InputManager {
     const nextBinding = pressedBindings.find(
       (binding) =>
         !this.gamepadCaptureHeld.has(binding) &&
-        !isFixedCancelGamepadBinding(binding),
+        !this.isFixedCancelGamepadBinding(player, binding),
     );
     this.gamepadCaptureHeld = new Set(pressedBindings);
     return nextBinding ?? null;
   }
 
   /**
-   * 接続済みコントローラーの Home ボタンを立ち上がり時だけ返す。
-   * ブラウザー・OS の仕様で Guide が公開されない機種では、通常どおり Esc を使える。
+   * Standard mappingのHome相当ボタンを立ち上がり時だけ返す。
+   * 非standard機器のbutton:16を通常ボタンとして登録できるよう、mappingも確認する。
    */
   public consumeGamepadHomePress(): boolean {
     const activeHomeButtons = this.gamepadHomeActive;
@@ -679,6 +646,7 @@ export class InputManager {
 
     for (const gamepad of this.gamepadSnapshot) {
       if (!gamepad?.connected) continue;
+      if (gamepad.mapping !== "standard") continue;
       if (!buttonDown(gamepad, FIXED_CANCEL_GAMEPAD_BUTTON_INDEX)) continue;
       activeHomeButtons.add(gamepad.index);
       if (!this.gamepadHomeHeld.has(gamepad.index)) pressedThisFrame = true;
@@ -727,6 +695,17 @@ export class InputManager {
     return this.gamepadSnapshot[player] ?? null;
   }
 
+  /** Standard mappingのbutton:16だけを固定キャンセル入力として扱う。 */
+  private isFixedCancelGamepadBinding(
+    player: PlayerId,
+    binding: GamepadBinding,
+  ): boolean {
+    return (
+      binding === `button:${FIXED_CANCEL_GAMEPAD_BUTTON_INDEX}` &&
+      this.gamepadForPlayer(player)?.mapping === "standard"
+    );
+  }
+
   /** 指定プレイヤーのゲームパッドから、しきい値を超えた全入力を取り出す。 */
   private pressedGamepadBindings(
     player: PlayerId,
@@ -751,8 +730,8 @@ export class InputManager {
     return bindings;
   }
 
-  /** Xboxゲームパッドをゲーム内ボタンへ変換する。 */
-  private sampleXboxGamepad(player: PlayerId, gamepad: Gamepad): number {
+  /** 機種を問わず、登録済みのGamepad API入力をゲーム内ボタンへ変換する。 */
+  private sampleGamepad(player: PlayerId, gamepad: Gamepad): number {
     return gamepadConfig.sample(player, gamepad);
   }
 }

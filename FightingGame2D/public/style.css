@@ -662,20 +662,6 @@ input {
   letter-spacing: 0.1em;
 }
 
-/* キーボード設定と Xbox 設定を、同一プレイヤー枠内で見分けられるように区切る。 */
-.key-config-gamepad {
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px solid #294b6a;
-}
-
-.key-config-gamepad h3 {
-  margin: 0 0 7px;
-  color: #9dcff0;
-  font-size: 11px;
-  letter-spacing: 0.09em;
-}
-
 .key-config-bindings {
   display: grid;
   gap: 5px;
