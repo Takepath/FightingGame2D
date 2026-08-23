@@ -218,14 +218,14 @@ river_guard,RIVER GUARD,blender,data/animations/river_guard.json,data/characters
 
 ## 6. 飛び道具の見た目をprojectiles.csvへ追加する
 
-飛び道具技を作る場合は、技より先に`public/data/projectiles.csv`へ見た目IDを追加します。`hitbox_radius`は見た目と独立した命中判定半径です。旧形式CSVでは列ごと省略でき、その場合は`gameConfig.ts`の共通値（既定14px）を使います。
+飛び道具技を作る場合は、技より先に`public/data/projectiles.csv`へ見た目IDを追加します。`hitbox_radius`は見た目と独立した命中判定半径で、この値だけは旧形式CSVでも列・値を省略でき、その場合は`gameConfig.ts`の共通値（既定14px）を使います。`spawn_offset_y`はキャラクター中心を基準にした出現位置、`target_opponent=true`は発射時点の相手の真上へ一度だけ出現させるメテオ型の設定です。`self_move_easing`では飛行中の横移動を一定・加速・減速・山なりに設定できます。
 
 ```csv
-id,render_type,asset,width,height,hitbox_radius,outer_radius,middle_radius,core_radius,outer_color,middle_color,core_color
-river_shot,circle,,52,52,16,26,17,8,#45B8FF,#8CDEFF,#F4FCFF
+id,render_type,asset,width,height,spawn_offset_y,target_opponent,self_move_easing,hitbox_radius,outer_radius,middle_radius,core_radius,outer_color,middle_color,core_color
+river_shot,circle,,52,52,0,false,linear,16,26,17,8,#45B8FF,#8CDEFF,#F4FCFF
 ```
 
-PNGを表示する場合は`render_type=sprite`、`asset=data/projectiles/river_shot.png`のように指定します。全列の意味は[CSV設定項目一覧](../public/data/CSV設定項目一覧.txt)を参照してください。
+PNGを表示する場合は`render_type=sprite`、`asset=data/projectiles/river_shot.png`のように指定します。画像はP1側と同じ右向き基準で用意してください。左向きに発射した場合はゲーム側で自動的に左右反転します。全列の意味は[CSV設定項目一覧](../public/data/CSV設定項目一覧.txt)を参照してください。
 
 ## 7. 固有技をmoves.csvへ追加する
 
@@ -234,8 +234,8 @@ PNGを表示する場合は`render_type=sprite`、`asset=data/projectiles/river_
 ここでは主要列だけを説明します。`invincible_frames`、ガード時硬直・ノックバック、ゲージ、キャンセルなどを含む完全な一覧は[CSV設定項目一覧](../public/data/CSV設定項目一覧.txt)を参照してください。
 
 ```csv
-character_id,move_id,button,startup,active,recovery,invincible_frames,damage,special_gauge_cost,super_gauge_gain,guard_bleak,starter_proration,range_x,range_y,self_move_x,self_move_y,knockback_x,knockback_y,guard_knockback_x,guard_self_knockback_x,hitstun,guard_stun,animation,attack_type,projectile_speed,projectile_lifetime,use_state,attack_level,projectile_id,command_id,cancel_into
-river_guard,river_shot,special,10,2,28,0,1100,10,15,false,0,0,0,0,0,390,220,130,0,27,14,special,projectile,700,105,ground,mid,river_shot,river_shot,
+character_id,move_id,button,startup,active,recovery,invincible_frames,damage,special_gauge_cost,super_gauge_gain,guard_bleak,starter_proration,range_x,range_y,self_move_x,self_move_y,self_move_speed,self_move_easing,knockback_x,knockback_y,guard_knockback_x,guard_self_knockback_x,hitstun,guard_stun,animation,attack_type,projectile_speed,projectile_lifetime,use_state,attack_level,projectile_id,command_id,cancel_into
+river_guard,river_shot,special,10,2,28,0,1100,10,15,false,0,0,0,0,0,0,linear,390,220,130,0,27,14,special,projectile,700,105,ground,mid,river_shot,river_shot,
 ```
 
 `moves.csv` の主要列は次のとおりです。
@@ -251,7 +251,9 @@ river_guard,river_shot,special,10,2,28,0,1100,10,15,false,0,0,0,0,0,390,220,130,
 | `guard_bleak`                              | `true` ならガードを貫通、`false` なら上中下属性に従ってガード可能。                             |
 | `starter_proration`                        | 始動補正率。`20`なら120%、`-10`なら90%からコンボ減衰を開始します。                              |
 | `range_x` / `range_y`                      | 近接技の前方リーチ・上下判定。                                                                  |
-| `self_move_x` / `self_move_y`              | 技開始時に自分へ与える前方・上方向の速度（px/秒）。正のY値は上昇。                              |
+| `self_move_x` / `self_move_y`              | 自キャラ移動の横・縦方向の比率。正のXは前方、正のYは上方。                                      |
+| `self_move_speed`                          | 自キャラ移動の基準速度（px/秒）。`0`なら移動しません。                                          |
+| `self_move_easing`                         | `linear`（一定）・`accelerate`（加速）・`decelerate`（減速）・`arc`（山なり）の速度変化。       |
 | `knockback_x` / `knockback_y`              | 命中時の横・縦方向の吹き飛び。                                                                  |
 | `hitstun`                                  | 命中時の硬直フレーム。                                                                          |
 | `animation`                                | JSONのアクション名。`light`・`heavy`・`special`など。                                           |

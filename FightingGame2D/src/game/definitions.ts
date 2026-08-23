@@ -15,6 +15,7 @@ import {
   type MoveDefinition,
   type MoveUseState,
   type ProjectileDefinition,
+  type SelfMoveEasing,
 } from "./types";
 
 /** ゲームデータCSVの読み込み元。ゲーム設定から差し替えられる。 */
@@ -61,6 +62,8 @@ const MOVE_HEADERS = [
   "range_y",
   "self_move_x",
   "self_move_y",
+  "self_move_speed",
+  "self_move_easing",
   "knockback_x",
   "knockback_y",
   "guard_knockback_x",
@@ -90,6 +93,9 @@ const PROJECTILE_HEADERS = [
   "asset",
   "width",
   "height",
+  "spawn_offset_y",
+  "target_opponent",
+  "self_move_easing",
   "outer_radius",
   "middle_radius",
   "core_radius",
@@ -275,6 +281,29 @@ function toAttackLevel(value: string): AttackLevel {
   if (value === "high" || value === "上") return "high";
   if (value === "low" || value === "下") return "low";
   return "mid";
+}
+
+/** 技・飛び道具の速度補間名を、CSVで許可した4種類だけに限定する。 */
+function toSelfMoveEasing(
+  value: string,
+  line: number,
+  fileName = "moves.csv",
+): SelfMoveEasing {
+  const easings: readonly SelfMoveEasing[] = [
+    "linear",
+    "accelerate",
+    "decelerate",
+    "arc",
+  ];
+  if (easings.includes(value as SelfMoveEasing)) {
+    return value as SelfMoveEasing;
+  }
+  return dataError(
+    fileName,
+    line,
+    "self_move_easing",
+    "linear / accelerate / decelerate / arc のいずれかを指定してください",
+  );
 }
 
 /**
@@ -522,12 +551,34 @@ function parseMoves(source: string): MoveDefinition[] {
       line,
       { integer: true, min: 0 },
     );
-    if (attackType === "projectile" && projectileSpeed <= 0) {
+    // x/yは移動方向の比率、speedは実際の速度として別々にCSVから読む。
+    const selfMoveX = dataNumber(row, "self_move_x", "moves.csv", line);
+    const selfMoveY = dataNumber(row, "self_move_y", "moves.csv", line);
+    const selfMoveSpeed = dataNumber(
+      row,
+      "self_move_speed",
+      "moves.csv",
+      line,
+      { min: 0 },
+    );
+    const selfMoveEasing = toSelfMoveEasing(
+      requiredText(row, "self_move_easing", "moves.csv", line),
+      line,
+    );
+    if (selfMoveSpeed > 0 && selfMoveX === 0 && selfMoveY === 0) {
       dataError(
         "moves.csv",
         line,
-        "projectile_speed",
-        "projectileでは0より大きい値が必要です",
+        "self_move_speed",
+        "self_move_x または self_move_y を0以外にしてください",
+      );
+    }
+    if (selfMoveSpeed === 0 && (selfMoveX !== 0 || selfMoveY !== 0)) {
+      dataError(
+        "moves.csv",
+        line,
+        "self_move_speed",
+        "self_move_x / self_move_y を使う場合は0より大きい値にしてください",
       );
     }
     if (attackType === "projectile" && projectileLifetime <= 0) {
@@ -578,8 +629,10 @@ function parseMoves(source: string): MoveDefinition[] {
       cancelInto: toCancelInto(cancelNames),
       rangeX: dataNumber(row, "range_x", "moves.csv", line, { min: 0 }),
       rangeY: dataNumber(row, "range_y", "moves.csv", line, { min: 0 }),
-      selfMoveX: dataNumber(row, "self_move_x", "moves.csv", line),
-      selfMoveY: dataNumber(row, "self_move_y", "moves.csv", line),
+      selfMoveX,
+      selfMoveY,
+      selfMoveSpeed,
+      selfMoveEasing,
       knockbackX: dataNumber(row, "knockback_x", "moves.csv", line, {
         min: 0,
       }),
@@ -645,6 +698,20 @@ function parseProjectileDefinitions(source: string): ProjectileDefinition[] {
         "render_type=sprite ではPNGパスが必要です",
       );
     }
+    const targetOpponent = requiredText(
+      row,
+      "target_opponent",
+      "projectiles.csv",
+      line,
+    ).toLowerCase();
+    if (targetOpponent !== "true" && targetOpponent !== "false") {
+      dataError(
+        "projectiles.csv",
+        line,
+        "target_opponent",
+        "true または false を指定してください",
+      );
+    }
     return {
       id: dataId(row, "id", "projectiles.csv", line),
       renderType,
@@ -655,6 +722,13 @@ function parseProjectileDefinitions(source: string): ProjectileDefinition[] {
       height: dataNumber(row, "height", "projectiles.csv", line, {
         min: renderType === "sprite" ? 1 : 0,
       }),
+      spawnOffsetY: dataNumber(row, "spawn_offset_y", "projectiles.csv", line),
+      targetOpponent: targetOpponent === "true",
+      selfMoveEasing: toSelfMoveEasing(
+        requiredText(row, "self_move_easing", "projectiles.csv", line),
+        line,
+        "projectiles.csv",
+      ),
       // 旧CSVに列がない場合は、従来と同じ共通半径を使って後方互換を保つ。
       hitboxRadius: row.hitbox_radius?.trim()
         ? dataNumber(row, "hitbox_radius", "projectiles.csv", line, { min: 1 })

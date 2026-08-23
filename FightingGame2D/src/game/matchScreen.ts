@@ -1933,6 +1933,10 @@ export class MatchScreen extends Container {
     sprite.anchor.set(0.5);
     sprite.width = definition.width;
     sprite.height = definition.height;
+    // PNGアセットはP1初期位置と同じ右向きとして登録する。
+    // 左向きに発射した時は、静止する飛び道具も含めて水平方向だけ反転する。
+    const horizontalScale = Math.abs(sprite.scale.x);
+    sprite.scale.x = projectile.facing < 0 ? -horizontalScale : horizontalScale;
     this.projectileSpriteLayer.addChild(sprite);
     this.projectileSprites.set(projectile, sprite);
     return sprite;

@@ -33,6 +33,9 @@ export type MoveUseState = "ground" | "air" | "any";
 /** 攻撃のガード属性。highは立ち、lowはしゃがみ、midは両方でガードできる。 */
 export type AttackLevel = "high" | "mid" | "low";
 
+/** 自キャラ移動中の速度変化。arcは開始・終了時を遅くする山なりの変化。 */
+export type SelfMoveEasing = "linear" | "accelerate" | "decelerate" | "arc";
+
 /** 飛び道具の描画方式。circleはコード描画、spriteはPNG画像を使用する。 */
 export type ProjectileRenderType = "circle" | "sprite";
 
@@ -96,10 +99,14 @@ export interface MoveDefinition {
   rangeX: number;
   /** 攻撃中心から上下へ伸びる判定の余白（ピクセル）。 */
   rangeY: number;
-  /** 技開始時に前方へ与える自分自身の移動速度（ピクセル/秒）。 */
+  /** 自キャラ移動の横方向。selfMoveYとの比率で進行方向を決める。 */
   selfMoveX: number;
-  /** 技開始時に上方向へ与える自分自身の移動速度（ピクセル/秒）。 */
+  /** 自キャラ移動の縦方向。正値は上方向、selfMoveXとの比率で進行方向を決める。 */
   selfMoveY: number;
+  /** 自キャラ移動の基準速度（ピクセル/秒）。0なら自キャラ移動をしない。 */
+  selfMoveSpeed: number;
+  /** startup終了後の自キャラ移動へ適用する速度変化。 */
+  selfMoveEasing: SelfMoveEasing;
   knockbackX: number;
   knockbackY: number;
   /** ガードした相手を後方へ押す横方向の速度。 */
@@ -127,12 +134,18 @@ export interface MoveDefinition {
 export interface ProjectileDefinition {
   id: string;
   renderType: ProjectileRenderType;
-  /** render_type=sprite の時に使用するPNGファイル。 */
+  /** render_type=sprite の時に使用する右向き基準のPNGファイル。 */
   asset: string;
   /** スプライト描画時の幅。円形描画では使用しない。 */
   width: number;
   /** スプライト描画時の高さ。円形描画では使用しない。 */
   height: number;
+  /** 発射者中心（targetOpponent時は相手中心）から上へずらす表示位置。単位はピクセル。 */
+  spawnOffsetY: number;
+  /** trueなら、発射時点の相手位置を検索してその真上へ一度だけ生成する。 */
+  targetOpponent: boolean;
+  /** 飛び道具の生存時間中に適用する移動速度の変化。 */
+  selfMoveEasing: SelfMoveEasing;
   /** 見た目と独立して設定する、命中判定の円半径。 */
   hitboxRadius: number;
   /** 円形エフェクトの外側・中間・中心の半径。 */

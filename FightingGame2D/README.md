@@ -112,7 +112,7 @@ Top画面で「ローカル対戦」を選ぶと、キャラクター選択画�
 
 ## 技中移動CSV
 
-`moves.csv` の `range_y` と `knockback_x` の間にある `self_move_x` / `self_move_y` は、技を開始したキャラクター自身へ与える移動速度です。単位はピクセル/秒で、`self_move_x` の正値は前方、`self_move_y` の正値は上方向です。昇竜拳のような前進・上昇技には両方を設定します。`0` の場合は追加移動しません。
+`moves.csv` の `range_y` と `knockback_x` の間には、自キャラ移動を設定する `self_move_x` / `self_move_y` / `self_move_speed` / `self_move_easing` があります。`x` と `y` は進行方向の比率（正のXは前方、正のYは上方）、`self_move_speed` は実際の速度（px/秒）です。`self_move_easing` は `linear`（一定）・`accelerate`（加速）・`decelerate`（減速）・`arc`（開始・終了時が遅い山なり）から選べます。自キャラ移動はstartup終了時、つまり最初のactiveフレームから開始し、技の終了直前まで再生されます。移動しない技は `x=0`、`y=0`、`speed=0` を指定してください。
 
 ## 無敵フレームCSV
 

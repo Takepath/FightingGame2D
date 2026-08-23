@@ -218,8 +218,16 @@ export interface ProjectileState {
   y: number;
   /** projectiles.csv由来の円形命中判定半径（固定小数点）。 */
   hitboxRadius: number;
+  /** 発射時の向き。静止する飛び道具のPNG反転にも使う。 */
+  facing: -1 | 1;
+  /** self_move_easingを適用する前の横方向速度。 */
+  baseVelocityX: number;
   velocityX: number;
+  /** 生成時の寿命。移動速度曲線の再生時間として使う。 */
+  initialLife: number;
   life: number;
+  /** projectiles.csvで指定する、飛行中の速度変化。 */
+  selfMoveEasing: ProjectileDefinition["selfMoveEasing"];
   damage: number;
   /** true の飛び道具は後ろ入力ガードを無視してダメージを与える。 */
   guardPiercing: boolean;
@@ -273,6 +281,11 @@ export class MatchSimulation implements DeterministicSimulation {
   private readonly commandsById: ReadonlyMap<string, CommandDefinition>;
   /** 飛び道具の見た目IDから命中判定半径を引く索引。 */
   private readonly projectileHitboxRadiusById: ReadonlyMap<string, number>;
+  /** 飛び道具の見た目IDから、出現位置・移動方式を引く索引。 */
+  private readonly projectileDefinitionsById: ReadonlyMap<
+    string,
+    ProjectileDefinition
+  >;
   /** コマンド判定に必要な入力履歴の最大フレーム数。 */
   private readonly inputHistoryLimit: number;
   /** トレーニング中、P1の攻撃後にP2の体力を即時回復するか。 */
@@ -302,6 +315,9 @@ export class MatchSimulation implements DeterministicSimulation {
         projectile.id,
         projectile.hitboxRadius * POSITION_SCALE,
       ]),
+    );
+    this.projectileDefinitionsById = new Map(
+      projectileDefinitions.map((projectile) => [projectile.id, projectile]),
     );
     this.inputHistoryLimit = Math.max(
       1,
@@ -617,6 +633,9 @@ export class MatchSimulation implements DeterministicSimulation {
       }
 
       fighter.actionFrame += 1;
+      // 自キャラ移動はstartup終了後の各フレームで速度を再設定する。
+      // 物理更新の直前に設定するため、linearは固定60FPSで一定の移動量になる。
+      this.applySelfMoveAnimation(fighter, activeMove);
       if (fighter.actionFrame >= this.moveLength(activeMove)) {
         // 保留ノックバックは被撃側のヒットスタン終了時に適用する。
         // ここで適用すると、後順の相手入力更新が速度を上書きするため行わない。
@@ -880,7 +899,8 @@ export class MatchSimulation implements DeterministicSimulation {
         ? this.throwDirectionFor(fighter, inputButtons)
         : 0;
     fighter.comboCancelable = false;
-    this.applySelfMove(fighter, move);
+    // startup=0の技だけは、開始フレームを自キャラ移動の初回フレームとして扱う。
+    this.applySelfMoveAnimation(fighter, move);
 
     if (!isComboCancel) {
       // 通常始動では、前のコンボのキャンセル回数を初期化する。
@@ -906,19 +926,83 @@ export class MatchSimulation implements DeterministicSimulation {
     }
   }
 
-  /** CSVのself_move_x/yを、向きと60FPS固定フレームに合わせて自分へ適用する。 */
-  private applySelfMove(fighter: FighterState, move: MoveDefinition): void {
-    if (move.selfMoveX !== 0) {
-      fighter.velocityX =
-        fighter.facing *
-        Math.round((move.selfMoveX * POSITION_SCALE) / FRAMES_PER_SECOND);
+  /**
+   * startup終了時から技終了直前まで、CSV指定の速度曲線で自キャラを移動する。
+   * self_move_x/yは進行方向の比率、self_move_speedは速度そのものとして扱う。
+   */
+  private applySelfMoveAnimation(
+    fighter: FighterState,
+    move: MoveDefinition,
+  ): void {
+    const movementFrames = move.active + move.recovery;
+    const movementFrame = fighter.actionFrame - move.startup;
+    if (
+      move.selfMoveSpeed === 0 ||
+      movementFrame < 0 ||
+      movementFrame >= movementFrames
+    ) {
+      return;
     }
-    if (move.selfMoveY !== 0) {
-      // CSVの正のY値を上昇として扱い、ゲーム座標系の負Y速度へ変換する。
-      fighter.velocityY = -Math.round(
-        (move.selfMoveY * POSITION_SCALE) / FRAMES_PER_SECOND,
+
+    const directionLength = Math.hypot(move.selfMoveX, move.selfMoveY);
+    // CSV読込時にも検証するが、外部から定義を渡した場合にも不正な除算を防ぐ。
+    if (directionLength === 0) return;
+
+    const speedPercent = this.selfMoveSpeedPercent(
+      move.selfMoveEasing,
+      movementFrame,
+      movementFrames,
+    );
+    const speedPerFrame =
+      (move.selfMoveSpeed * POSITION_SCALE * speedPercent) /
+      (FRAMES_PER_SECOND * 100);
+    fighter.velocityX =
+      fighter.facing *
+      Math.round((speedPerFrame * move.selfMoveX) / directionLength);
+    // CSVの正のY値を上昇として扱い、ゲーム座標系の負Y速度へ変換する。
+    fighter.velocityY = -Math.round(
+      (speedPerFrame * move.selfMoveY) / directionLength,
+    );
+  }
+
+  /** 自キャラ移動の現在フレームに対応する速度倍率（百分率）を決定論的に返す。 */
+  private selfMoveSpeedPercent(
+    easing: MoveDefinition["selfMoveEasing"],
+    movementFrame: number,
+    movementFrames: number,
+  ): number {
+    const completedFrames = movementFrame + 1;
+    if (easing === "accelerate") {
+      return Math.trunc((completedFrames * 100) / movementFrames);
+    }
+    if (easing === "decelerate") {
+      return Math.trunc(
+        ((movementFrames - movementFrame) * 100) / movementFrames,
       );
     }
+    if (easing === "arc") {
+      // 両端を遅く、中央を最速にする三角形の速度曲線。浮動小数演算を避ける。
+      const nearestEnd = Math.min(
+        completedFrames,
+        movementFrames - movementFrame,
+      );
+      return Math.trunc((nearestEnd * 200) / (movementFrames + 1));
+    }
+    return 100;
+  }
+
+  /** 飛び道具の基準横速度へ、projectiles.csvのself_move_easingを適用する。 */
+  private easedProjectileVelocityX(
+    baseVelocityX: number,
+    easing: ProjectileDefinition["selfMoveEasing"],
+    movementFrame: number,
+    movementFrames: number,
+  ): number {
+    return Math.trunc(
+      (baseVelocityX *
+        this.selfMoveSpeedPercent(easing, movementFrame, movementFrames)) /
+        100,
+    );
   }
 
   /** 技のCSV消費量を支払える残量があるかを返す。 */
@@ -1283,25 +1367,48 @@ export class MatchSimulation implements DeterministicSimulation {
   }
 
   private spawnProjectile(attacker: FighterState, move: MoveDefinition): void {
-    /** 攻撃者の向きとCSV速度を使い、波動拳の初期状態を生成する。 */
+    /** 攻撃者または検索した相手を基準に、CSV定義の飛び道具を1つだけ生成する。 */
+    const definition = this.projectileDefinitionsById.get(
+      move.projectileId ?? "",
+    );
+    const target =
+      definition?.targetOpponent === true
+        ? this.fighters[attacker.player === 0 ? 1 : 0]
+        : attacker;
+    const baseVelocityX =
+      attacker.facing *
+      Math.round((move.projectileSpeed * POSITION_SCALE) / FRAMES_PER_SECOND);
+    const initialLife = move.projectileLifetime;
     this.projectiles.push({
       owner: attacker.player,
       visualId: move.projectileId ?? "",
-      x:
-        attacker.x +
-        attacker.facing *
-          MATCH_CONFIG.combat.projectileSpawnOffsetX *
-          POSITION_SCALE,
+      // 相手検索時は、その時点のX座標を記録するだけで以後は追尾しない。
+      x: definition?.targetOpponent
+        ? target.x
+        : attacker.x +
+          attacker.facing *
+            MATCH_CONFIG.combat.projectileSpawnOffsetX *
+            POSITION_SCALE,
+      // Y座標は足元ではなく、選択した基準キャラクターの被弾判定中心から指定する。
       y:
-        attacker.y -
-        MATCH_CONFIG.combat.projectileSpawnOffsetY * POSITION_SCALE,
+        this.fighterCenterY(target) -
+        (definition?.spawnOffsetY ??
+          MATCH_CONFIG.combat.projectileSpawnOffsetY) *
+          POSITION_SCALE,
       hitboxRadius:
         this.projectileHitboxRadiusById.get(move.projectileId ?? "") ??
         PROJECTILE_HITBOX_RADIUS,
-      velocityX:
-        attacker.facing *
-        Math.round((move.projectileSpeed * POSITION_SCALE) / FRAMES_PER_SECOND),
-      life: move.projectileLifetime,
+      facing: attacker.facing,
+      baseVelocityX,
+      velocityX: this.easedProjectileVelocityX(
+        baseVelocityX,
+        definition?.selfMoveEasing ?? "linear",
+        0,
+        initialLife,
+      ),
+      initialLife,
+      life: initialLife,
+      selfMoveEasing: definition?.selfMoveEasing ?? "linear",
       damage: move.damage,
       guardPiercing: move.guardPiercing,
       starterProration: move.starterProration,
@@ -1315,11 +1422,27 @@ export class MatchSimulation implements DeterministicSimulation {
     });
   }
 
+  /** キャラクターの被弾判定中央を、飛び道具出現位置の基準座標として返す。 */
+  private fighterCenterY(fighter: FighterState): number {
+    return (
+      fighter.y -
+      ((fighter.character.hurtboxTop + fighter.character.hurtboxBottom) / 2) *
+        POSITION_SCALE
+    );
+  }
+
   private updateProjectiles(inputs: readonly [FrameInput, FrameInput]): void {
     /** 飛び道具を移動し、相手への命中・ガード・寿命切れを判定する。 */
     if (this.winner !== null) return;
     for (let index = this.projectiles.length - 1; index >= 0; index -= 1) {
       const projectile = this.projectiles[index];
+      const movementFrame = projectile.initialLife - projectile.life;
+      projectile.velocityX = this.easedProjectileVelocityX(
+        projectile.baseVelocityX,
+        projectile.selfMoveEasing,
+        movementFrame,
+        projectile.initialLife,
+      );
       projectile.x += projectile.velocityX;
       projectile.life -= 1;
       const defender = this.fighters[projectile.owner === 0 ? 1 : 0];

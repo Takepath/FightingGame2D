@@ -86,8 +86,11 @@ guard_bleak          ガード貫通かどうかです。true でガード不能
 starter_proration    始動補正です。コンボの初期倍率を増減する整数です。20なら120%、-10なら90%、0なら100%です。下限は10%です。
 range_x              近接攻撃判定の前方への届く距離です。単位はピクセルです。押し込み判定が発生する位置から測ります。投げでは投げ間合いになります。
 range_y              近接攻撃判定の上下方向の許容距離です。単位はピクセルです。空中攻撃・対空技の高さに合わせます。投げでは成立する高さの許容距離になります。
-self_move_x          技中に自キャラを前方へ動かす速度です。単位はピクセル/秒です。正の値で前方、負の値で後方へ動きます。
-self_move_y          技中に自キャラを上下へ動かす速度です。単位はピクセル/秒です。正の値で上方、負の値で下方へ動きます。
+self_move_x          自キャラ移動の横方向です。self_move_yとの比率で進行方向を決めます。正の値で前方、負の値で後方です。例: 前上方向は 1 と 1 を指定します。
+self_move_y          自キャラ移動の縦方向です。正の値で上方、負の値で下方です。self_move_xとの絶対値比だけが方向に使われます。
+self_move_speed      自キャラ移動の基準速度です。単位はピクセル/秒です。0なら移動せず、0より大きい場合はself_move_xまたはself_move_yも0以外にします。
+self_move_easing     自キャラ移動の速度変化です。linear（一定）、accelerate（加速）、decelerate（減速）、arc（開始・終了時が遅い山なり）から選びます。
+                    自キャラ移動はstartup終了時（最初のactiveフレーム）から、技の終了直前まで再生されます。
 knockback_x          ヒットした相手を横へ押し出す強さです。0で横方向のノックバックなしです。前投げでは投げられた相手の吹き飛び量になります。
 knockback_y          ヒットした相手を上へ打ち上げる強さです。正の値で打ち上げ、0で打ち上げなしです。
 guard_knockback_x    ガードした相手を後方へ押し出す横方向の強さです。0以上の数値を指定します。0で相手は後退しません。
@@ -96,7 +99,7 @@ hitstun              ヒットした相手が行動できなくなるフレー�
 guard_stun           ガードした相手が行動できなくなるフレーム数です。0以上の整数を指定します。0ならガード硬直なしです。
 animation            技中に再生するアニメーション名です。idle、walk、jump、light、heavy、special、hit、block、crouchBlock、ko を指定します。
 attack_type          攻撃の種類です。melee は近接攻撃、projectile は飛び道具です。
-projectile_speed     attack_type=projectile の飛行速度です。単位はピクセル/秒です。meleeでは0にします。
+projectile_speed     attack_type=projectile の飛行速度です。単位はピクセル/秒です。0なら出現位置に留まる単発攻撃にできます。meleeでは0にします。
 projectile_lifetime  attack_type=projectile の存続時間です。単位はフレームです。meleeでは0にします。
 use_state            技を出せる状態です。ground（地上のみ）、air（空中のみ）、any（地上・空中）から指定します。
 attack_level         攻撃属性です。high はしゃがみガード不可、low は立ちガード不可、mid は両方でガード可能です。
@@ -105,8 +108,8 @@ command_id           必殺技コマンドです。commands.csv の command_id �
 cancel_into          この技からキャンセルして出せる攻撃種別です。light、heavy、special、throw を | 区切りで指定します。空欄はキャンセル不可です。
 
 記入例（波動拳）
-character_id,move_id,button,startup,active,recovery,invincible_frames,damage,special_gauge_cost,super_gauge_gain,guard_bleak,starter_proration,range_x,range_y,self_move_x,self_move_y,knockback_x,knockback_y,guard_knockback_x,guard_self_knockback_x,hitstun,guard_stun,animation,attack_type,projectile_speed,projectile_lifetime,use_state,attack_level,projectile_id,command_id,cancel_into
-sample,hadoken,special,13,7,25,0,500,10,15,false,0,0,0,0,0,300,0,100,80,15,8,special,projectile,720,110,ground,mid,hadoken_blue,hadoken,
+character_id,move_id,button,startup,active,recovery,invincible_frames,damage,special_gauge_cost,super_gauge_gain,guard_bleak,starter_proration,range_x,range_y,self_move_x,self_move_y,self_move_speed,self_move_easing,knockback_x,knockback_y,guard_knockback_x,guard_self_knockback_x,hitstun,guard_stun,animation,attack_type,projectile_speed,projectile_lifetime,use_state,attack_level,projectile_id,command_id,cancel_into
+sample,hadoken,special,13,7,25,0,500,10,15,false,0,0,0,0,0,0,linear,300,0,100,80,15,8,special,projectile,720,110,ground,mid,hadoken_blue,hadoken,
 
 設定上の注意
 - command_id を持つ必殺技をキャンセルで出す場合も、対応する方向コマンドと攻撃ボタン入力が必要です。
@@ -122,9 +125,12 @@ sample,hadoken,special,13,7,25,0,500,10,15,false,0,0,0,0,0,300,0,100,80,15,8,spe
 列名                 内容
 id                   飛び道具を識別する一意のIDです。moves.csv の projectile_id に記入します。
 render_type          描画方式です。circle は3重円のプログラム描画、sprite はPNG画像を表示します。
-asset                render_type=sprite のPNG画像のパスです。circleでは空欄にします。
+asset                render_type=sprite のPNG画像のパスです。画像はP1側と同じ右向き基準で登録します。左向きへ発射する場合は自動で左右反転します。circleでは空欄にします。
 width                spriteの表示幅です。単位はピクセルで、spriteでは1以上を指定します。circleでは0を指定できます。
 height               spriteの表示高です。単位はピクセルで、spriteでは1以上を指定します。circleでは0を指定できます。
+spawn_offset_y       出現Y座標です。発射者中心（target_opponent=trueなら相手中心）から上へずらすピクセル数を指定します。0なら中心に出現します。
+target_opponent      trueなら、発射時の相手のX座標を検索して真上へ一度だけ出現します。falseなら発射者の前方に出現します。追尾はしません。
+self_move_easing     projectile_speedの横移動に適用する速度変化です。linear（一定）、accelerate（加速）、decelerate（減速）、arc（開始・終了時が遅い山なり）から選びます。
 hitbox_radius        任意列です。飛び道具の円形命中判定半径を見た目と独立して1以上のピクセル数で指定します。列または値を省略した旧CSVでは gameConfig.ts の projectileHitboxRadius（既定14）を使います。
 outer_radius         circleの外側の円の半径です。単位はピクセルです。spriteでは使用しません。
 middle_radius        circleの中間の円の半径です。単位はピクセルです。spriteでは使用しません。
@@ -134,12 +140,16 @@ middle_color         circleの中間の色です。#RRGGBB形式です。sprite�
 core_color           circleの中心の色です。#RRGGBB形式です。spriteでは使用しません。
 
 記入例（画像を使う飛び道具）
-id,render_type,asset,width,height,hitbox_radius,outer_radius,middle_radius,core_radius,outer_color,middle_color,core_color
-my_fireball,sprite,data/projectiles/my_fireball.png,96,64,18,0,0,0,#FFFFFF,#FFFFFF,#FFFFFF
+id,render_type,asset,width,height,spawn_offset_y,target_opponent,self_move_easing,hitbox_radius,outer_radius,middle_radius,core_radius,outer_color,middle_color,core_color
+my_fireball,sprite,data/projectiles/my_fireball.png,96,64,0,false,linear,18,0,0,0,#FFFFFF,#FFFFFF,#FFFFFF
 
 記入例（3重円で描画する飛び道具）
-id,render_type,asset,width,height,hitbox_radius,outer_radius,middle_radius,core_radius,outer_color,middle_color,core_color
-my_orb,circle,,44,44,14,22,14,7,#4FD8FF,#72E7FF,#E8F8FF
+id,render_type,asset,width,height,spawn_offset_y,target_opponent,self_move_easing,hitbox_radius,outer_radius,middle_radius,core_radius,outer_color,middle_color,core_color
+my_orb,circle,,44,44,0,false,linear,14,22,14,7,#4FD8FF,#72E7FF,#E8F8FF
+
+メテオ型の設定例
+target_opponent=true と moves.csv の projectile_speed=0 を組み合わせると、発射時点の相手位置で一度だけ命中判定を出す単発技になります。
+spawn_offset_y は見た目の高さを調整します。命中させる場合は、hitbox_radius と相手の被弾判定が重なる値にしてください。
 
 
 追加時の確認手順
