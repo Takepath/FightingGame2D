@@ -10,7 +10,7 @@ import type {
   PlayerId,
   ProjectileDefinition,
 } from "./types";
-import { InputButton, pressed } from "./types";
+import { InputButton, normalizeFrameInput, pressed } from "./types";
 import type { DeterministicSimulation } from "./frameSynchronizer";
 import { FIGHTING_GAME_CONFIG } from "./gameConfig";
 
@@ -344,6 +344,9 @@ export class MatchSimulation implements DeterministicSimulation {
 
   public step(inputs: readonly [FrameInput, FrameInput]): void {
     /** 60Hzの固定フレームでラウンド演出・時計・戦闘を決定論的に処理する。 */
+    // CPU・通信を含むすべての入力を同じ規則で正規化し、コマンド履歴にも相反方向を残さない。
+    const playerOneInput = normalizeFrameInput(inputs[0]);
+    const playerTwoInput = normalizeFrameInput(inputs[1]);
     if (this.hitStopFrames > 0) {
       // ヒットストップ中は全ファイター・飛び道具・時計を進めず、画面を固定する。
       this.hitStopFrames -= 1;
@@ -365,8 +368,8 @@ export class MatchSimulation implements DeterministicSimulation {
 
     if (this.roundIntroFrames > 0) {
       // 開始演出中に押されているキーを攻撃開始へ持ち越さない。
-      this.fighters[0].previousButtons = inputs[0].buttons;
-      this.fighters[1].previousButtons = inputs[1].buttons;
+      this.fighters[0].previousButtons = playerOneInput.buttons;
+      this.fighters[1].previousButtons = playerTwoInput.buttons;
       this.roundIntroFrames -= 1;
       return;
     }
@@ -385,19 +388,19 @@ export class MatchSimulation implements DeterministicSimulation {
     }
 
     this.updateFacing();
-    this.updateFighter(this.fighters[0], inputs[0]);
-    this.updateFighter(this.fighters[1], inputs[1]);
-    this.resolveAttack(this.fighters[0], this.fighters[1], inputs[1]);
+    this.updateFighter(this.fighters[0], playerOneInput);
+    this.updateFighter(this.fighters[1], playerTwoInput);
+    this.resolveAttack(this.fighters[0], this.fighters[1], playerTwoInput);
     // トレーニングKO直後は、同フレームの残り攻撃を解決せず再開待機へ移る。
     if (this.training && this.trainingResetFrames > 0) return;
-    this.resolveAttack(this.fighters[1], this.fighters[0], inputs[0]);
+    this.resolveAttack(this.fighters[1], this.fighters[0], playerOneInput);
     if (this.training && this.trainingResetFrames > 0) return;
-    this.updateProjectiles(inputs);
+    this.updateProjectiles(playerOneInput, playerTwoInput);
     this.resolveCollision();
     // 飛び越えや押し戻し後の位置も反映し、次フレームの入力方向を正しく判定する。
     this.updateFacing();
-    this.updateSuperGaugeFromForwardWalk(this.fighters[0], inputs[0]);
-    this.updateSuperGaugeFromForwardWalk(this.fighters[1], inputs[1]);
+    this.updateSuperGaugeFromForwardWalk(this.fighters[0], playerOneInput);
+    this.updateSuperGaugeFromForwardWalk(this.fighters[1], playerTwoInput);
   }
 
   public resetMatch(): void {
@@ -1477,7 +1480,10 @@ export class MatchSimulation implements DeterministicSimulation {
     );
   }
 
-  private updateProjectiles(inputs: readonly [FrameInput, FrameInput]): void {
+  private updateProjectiles(
+    playerOneInput: FrameInput,
+    playerTwoInput: FrameInput,
+  ): void {
     /** 飛び道具を移動し、相手への命中・ガード・寿命切れを判定する。 */
     if (this.winner !== null) return;
     for (let index = this.projectiles.length - 1; index >= 0; index -= 1) {
@@ -1503,7 +1509,7 @@ export class MatchSimulation implements DeterministicSimulation {
           attacker,
           defender,
           projectile,
-          inputs[defender.player],
+          defender.player === 0 ? playerOneInput : playerTwoInput,
         );
         if (connected) {
           this.projectiles.splice(index, 1);
@@ -1945,7 +1951,7 @@ export class MatchSimulation implements DeterministicSimulation {
         const chargeInput = history[index];
         if (this.isBackChargeInput(chargeInput)) continue;
 
-        // 前方向（左右同時押しを含む）は、溜めを即時に途切れさせる。
+        // 前方向は溜めを即時に途切れさせる。左右同時押しは共通正規化によりニュートラルとなる。
         if (this.hasForwardChargeInput(chargeInput)) {
           chargeComplete = false;
           break;
@@ -1984,7 +1990,7 @@ export class MatchSimulation implements DeterministicSimulation {
     return down && back && !forward && !up;
   }
 
-  /** 溜め中は後ろ・斜め後ろを連続入力として許可し、前入力の同時押しは無効にする。 */
+  /** 溜め中は後ろ・斜め後ろだけを連続入力として許可する。相反方向は事前にニュートラル化される。 */
   private isBackChargeInput(input: CommandInputHistoryEntry): boolean {
     const forward = this.isDirectionPressed(input.buttons, input.facing);
     const back = this.isDirectionPressed(
@@ -1994,7 +2000,7 @@ export class MatchSimulation implements DeterministicSimulation {
     return back && !forward;
   }
 
-  /** 溜め中の前方向入力（左右同時押しを含む）かを返す。 */
+  /** 溜め中の前方向入力かを返す。 */
   private hasForwardChargeInput(input: CommandInputHistoryEntry): boolean {
     return this.isDirectionPressed(input.buttons, input.facing);
   }
@@ -2025,7 +2031,7 @@ export class MatchSimulation implements DeterministicSimulation {
     // 自動振り向き後の相手位置を基準に、「敵と反対方向」を後ろ入力として扱う。
     const awayButton =
       attacker.x >= defender.x ? InputButton.Left : InputButton.Right;
-    // 前後同時入力は前入力を優先し、後ろガードを無効にする。
+    // 相反方向はstep開始時にニュートラル化済み。前入力が残る場合だけ後ろガードを無効にする。
     const forwardButton =
       attacker.x >= defender.x ? InputButton.Right : InputButton.Left;
     if (pressed(input, forwardButton) || !pressed(input, awayButton)) {

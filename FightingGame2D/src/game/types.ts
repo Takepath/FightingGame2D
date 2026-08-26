@@ -10,8 +10,39 @@ export const enum InputButton {
   Throw = 1 << 7,
 }
 
+/** 方向入力として扱う4方向のビットをまとめたマスク。 */
+const DIRECTION_BUTTON_MASK =
+  InputButton.Left | InputButton.Right | InputButton.Up | InputButton.Down;
+
 export interface FrameInput {
   readonly buttons: number;
+}
+
+/**
+ * 相反する方向が同時に押された入力を、方向入力全体のニュートラルへ正規化する。
+ *
+ * 左右または上下のどちらか一方でも相反すると、残っている方向（例: 左+下+右の下）も
+ * 無効にする。攻撃ボタンは保持するため、方向ニュートラル中の攻撃入力は通常どおり扱える。
+ */
+export function normalizeDirectionalButtons(buttons: number): number {
+  const horizontalConflict =
+    (buttons & (InputButton.Left | InputButton.Right)) ===
+    (InputButton.Left | InputButton.Right);
+  const verticalConflict =
+    (buttons & (InputButton.Up | InputButton.Down)) ===
+    (InputButton.Up | InputButton.Down);
+  return horizontalConflict || verticalConflict
+    ? buttons & ~DIRECTION_BUTTON_MASK
+    : buttons;
+}
+
+/**
+ * 外部入力・CPU入力・通信入力を共通の方向入力規則へそろえる。
+ * 変更がない場合は元のオブジェクトを返し、固定フレームごとの不要な生成を避ける。
+ */
+export function normalizeFrameInput(input: FrameInput): FrameInput {
+  const buttons = normalizeDirectionalButtons(input.buttons);
+  return buttons === input.buttons ? input : { buttons };
 }
 
 export type PlayerId = 0 | 1;

@@ -1,4 +1,9 @@
-import { type FrameInput, InputButton, type PlayerId } from "./types";
+import {
+  type FrameInput,
+  InputButton,
+  normalizeDirectionalButtons,
+  type PlayerId,
+} from "./types";
 import {
   type ConfigurableInputAction,
   type ConfiguredGamepadBinding,
@@ -581,7 +586,8 @@ export class InputManager {
     const gamepad = this.gamepadForPlayer(player);
     if (gamepad?.connected) buttons |= this.sampleGamepad(player, gamepad);
 
-    return { buttons };
+    // キーボードとゲームパッドをまたいだ相反入力も、共通のニュートラル規則で処理する。
+    return { buttons: normalizeDirectionalButtons(buttons) };
   }
 
   /** 登録したブラウザイベントを解除する。 */
