@@ -87,7 +87,9 @@ export interface MoveDefinition {
   damage: number;
   /** 最大100の必殺技ゲージから、技開始時に消費する量。0なら消費しない。 */
   specialGaugeCost: number;
-  /** 最大300の超必殺ゲージへ、技開始時に加算する量。0なら増えない。 */
+  /** 最大300の超必殺ゲージから、技開始時に消費する量。0なら消費しない。 */
+  superGaugeCost: number;
+  /** 最大300の超必殺ゲージへ、ガードされず命中した時に加算する量。0なら増えない。 */
   superGaugeGain: number;
   /** trueなら後ろ入力ガードを無視してダメージを与える。投げは必ずtrueにする。 */
   guardPiercing: boolean;

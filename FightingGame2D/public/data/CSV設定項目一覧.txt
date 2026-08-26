@@ -81,7 +81,8 @@ recovery             攻撃判定終了後の硬直フレーム数です。
 invincible_frames    技の開始から無敵になるフレーム数です。0以上、startup+active+recovery以下の整数を指定します。無敵中は打撃・飛び道具・投げを受けません。
 damage               与えるダメージの実数値です。例: 500 は500ダメージです。0以上の整数を指定します。
 special_gauge_cost   必殺技ゲージの消費量です。0～100で指定します。発動時に不足している技は出せません。
-super_gauge_gain     超必殺ゲージの増加量です。0～300で指定します。技を出した時に加算され、最大値は300です。
+super_gauge_cost     超必殺ゲージの消費量です。0～300で指定します。発動時に不足している技は出せません。
+super_gauge_gain     超必殺ゲージの増加量です。0～300で指定します。相手にガードされずに命中した時だけ加算され、最大値は300です。
 guard_bleak          ガード貫通かどうかです。true でガード不能、false で通常のガード判定を行います。投げにも true を指定します。
 starter_proration    始動補正です。コンボの初期倍率を増減する整数です。20なら120%、-10なら90%、0なら100%です。下限は10%です。
 range_x              近接攻撃判定の前方への届く距離です。単位はピクセルです。押し込み判定が発生する位置から測ります。投げでは投げ間合いになります。
@@ -108,8 +109,8 @@ command_id           必殺技コマンドです。commands.csv の command_id �
 cancel_into          この技からキャンセルして出せる攻撃種別です。light、heavy、special、throw を | 区切りで指定します。空欄はキャンセル不可です。
 
 記入例（波動拳）
-character_id,move_id,button,startup,active,recovery,invincible_frames,damage,special_gauge_cost,super_gauge_gain,guard_bleak,starter_proration,range_x,range_y,self_move_x,self_move_y,self_move_speed,self_move_easing,knockback_x,knockback_y,guard_knockback_x,guard_self_knockback_x,hitstun,guard_stun,animation,attack_type,projectile_speed,projectile_lifetime,use_state,attack_level,projectile_id,command_id,cancel_into
-sample,hadoken,special,13,7,25,0,500,10,15,false,0,0,0,0,0,0,linear,300,0,100,80,15,8,special,projectile,720,110,ground,mid,hadoken_blue,hadoken,
+character_id,move_id,button,startup,active,recovery,invincible_frames,damage,special_gauge_cost,super_gauge_cost,super_gauge_gain,guard_bleak,starter_proration,range_x,range_y,self_move_x,self_move_y,self_move_speed,self_move_easing,knockback_x,knockback_y,guard_knockback_x,guard_self_knockback_x,hitstun,guard_stun,animation,attack_type,projectile_speed,projectile_lifetime,use_state,attack_level,projectile_id,command_id,cancel_into
+sample,hadoken,special,13,7,25,0,500,10,15,0,false,0,0,0,0,0,0,linear,300,0,100,80,15,8,special,projectile,720,110,ground,mid,hadoken_blue,hadoken,
 
 設定上の注意
 - command_id を持つ必殺技をキャンセルで出す場合も、対応する方向コマンドと攻撃ボタン入力が必要です。

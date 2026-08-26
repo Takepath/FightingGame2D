@@ -271,7 +271,13 @@ export class CpuController {
   /** シミュレーションの投げ可能距離と同じ、押し込み判定の重なりを確認する。 */
   private isThrowRange(self: FighterState, opponent: FighterState): boolean {
     const throwMove = this.throwMoveForCharacter(self);
-    if (!throwMove) return false;
+    if (
+      !throwMove ||
+      throwMove.specialGaugeCost > self.specialGauge ||
+      throwMove.superGaugeCost > self.superGauge
+    ) {
+      return false;
+    }
     const verticalRange = throwMove.rangeY * POSITION_SCALE;
     const horizontalRange =
       ((self.character.hurtboxWidth + opponent.character.hurtboxWidth) / 2 +
@@ -322,6 +328,7 @@ export class CpuController {
       (move) =>
         move.commandIds.length > 0 &&
         move.specialGaugeCost <= self.specialGauge &&
+        move.superGaugeCost <= self.superGauge &&
         (move.useState === "ground" || move.useState === "any"),
     );
     if (preferredMoveId) {

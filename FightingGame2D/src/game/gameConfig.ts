@@ -98,6 +98,8 @@ export interface FightingGameConfig {
       readonly specialMax: number;
       readonly superMax: number;
       readonly specialRecoveryFrames: number;
+      /** 前歩きを継続した時、超必殺ゲージを1加算するまでの固定フレーム数。 */
+      readonly superGaugeForwardWalkGainIntervalFrames: number;
     };
     readonly rounds: {
       readonly winsRequired: number;
@@ -320,6 +322,7 @@ export const FIGHTING_GAME_CONFIG: FightingGameConfig = {
       specialMax: 100,
       superMax: 300,
       specialRecoveryFrames: FIXED_FPS,
+      superGaugeForwardWalkGainIntervalFrames: 5,
     },
     rounds: {
       winsRequired: 2,
@@ -581,9 +584,15 @@ export function validateFightingGameConfig(config: FightingGameConfig): void {
     !Number.isInteger(config.match.gauges.superMax) ||
     config.match.gauges.superMax < 1 ||
     !Number.isInteger(config.match.gauges.specialRecoveryFrames) ||
-    config.match.gauges.specialRecoveryFrames < 1
+    config.match.gauges.specialRecoveryFrames < 1 ||
+    !Number.isInteger(
+      config.match.gauges.superGaugeForwardWalkGainIntervalFrames,
+    ) ||
+    config.match.gauges.superGaugeForwardWalkGainIntervalFrames < 1
   ) {
-    throw new Error("match.gauges の最大値・回復間隔が不正です");
+    throw new Error(
+      "match.gauges の最大値・回復間隔・前歩き増加間隔が不正です",
+    );
   }
   if (
     !Number.isInteger(config.match.rounds.winsRequired) ||

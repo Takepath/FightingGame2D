@@ -73,11 +73,15 @@ export const FRAMES_PER_SECOND = FIGHTING_GAME_CONFIG.engine.fixedFps;
 /** 必殺技ゲージの最大値。HUDとCSVの消費量もこの値を上限にする。 */
 export const MAX_SPECIAL_GAUGE = MATCH_CONFIG.gauges.specialMax;
 
-/** 超必殺ゲージの最大値。技を使うたびにCSV指定量を加算する。 */
+/** 超必殺ゲージの最大値。命中と前歩きによる加算もこの値で止める。 */
 export const MAX_SUPER_GAUGE = MATCH_CONFIG.gauges.superMax;
 
 /** 必殺技ゲージを1ポイント回復するまでの固定フレーム数（毎秒1ポイント）。 */
 const SPECIAL_GAUGE_RECOVERY_FRAMES = MATCH_CONFIG.gauges.specialRecoveryFrames;
+
+/** 前歩きを継続した時、超必殺ゲージを1加算するまでの固定フレーム数。 */
+const SUPER_GAUGE_FORWARD_WALK_GAIN_INTERVAL_FRAMES =
+  MATCH_CONFIG.gauges.superGaugeForwardWalkGainIntervalFrames;
 
 /** ヒットスタンがこの値を超えた実ヒットで、ヒットストップを開始する。 */
 const HIT_STOP_HITSTUN_THRESHOLD = MATCH_CONFIG.combat.hitStopHitstunThreshold;
@@ -166,8 +170,10 @@ export interface FighterState {
   specialGauge: number;
   /** 必殺技ゲージを1ポイント回復するまでに経過した固定フレーム数。 */
   specialGaugeRecoveryFrames: number;
-  /** 最大300で管理する超必殺ゲージ。ラウンド開始時は0で、技の使用で増加する。 */
+  /** 最大300で管理する超必殺ゲージ。ラウンド開始時は0で、非ガード命中と前歩きで増加する。 */
   superGauge: number;
+  /** 連続して前歩きした固定フレーム数。ゲージ加算・中断時に0へ戻す。 */
+  superGaugeForwardWalkFrames: number;
   action: FighterAction;
   actionFrame: number;
   activeMoveId: string | null;
@@ -244,6 +250,8 @@ export interface ProjectileState {
   hitstun: number;
   /** ガード成功側の操作を抑止する固定フレーム数。 */
   guardStun: number;
+  /** この飛び道具を出した技が、非ガード命中時に加算する超必殺ゲージ量。 */
+  superGaugeGain: number;
 }
 
 export class MatchSimulation implements DeterministicSimulation {
@@ -388,6 +396,8 @@ export class MatchSimulation implements DeterministicSimulation {
     this.resolveCollision();
     // 飛び越えや押し戻し後の位置も反映し、次フレームの入力方向を正しく判定する。
     this.updateFacing();
+    this.updateSuperGaugeFromForwardWalk(this.fighters[0], inputs[0]);
+    this.updateSuperGaugeFromForwardWalk(this.fighters[1], inputs[1]);
   }
 
   public resetMatch(): void {
@@ -446,6 +456,7 @@ export class MatchSimulation implements DeterministicSimulation {
       specialGauge: MAX_SPECIAL_GAUGE,
       specialGaugeRecoveryFrames: 0,
       superGauge: 0,
+      superGaugeForwardWalkFrames: 0,
       action: "idle",
       actionFrame: 0,
       activeMoveId: null,
@@ -814,7 +825,7 @@ export class MatchSimulation implements DeterministicSimulation {
       }
       if (
         move.commandIds.length === 0 ||
-        !this.hasSpecialGaugeForMove(fighter, move) ||
+        !this.hasGaugeForMove(fighter, move) ||
         (attackButtons & move.button) === 0
       ) {
         continue;
@@ -852,7 +863,7 @@ export class MatchSimulation implements DeterministicSimulation {
       if (
         (move.useState === "any" || move.useState === useState) &&
         move.commandIds.length === 0 &&
-        this.hasSpecialGaugeForMove(fighter, move) &&
+        this.hasGaugeForMove(fighter, move) &&
         (attackButtons & move.button) !== 0
       ) {
         return move;
@@ -870,11 +881,9 @@ export class MatchSimulation implements DeterministicSimulation {
     /** 選択済みの技を開始し、命中・飛び道具生成用の状態をリセットする。 */
     // 技を開始したフレームにだけCSV指定の必殺技ゲージを消費する。
     fighter.specialGauge -= move.specialGaugeCost;
-    // 超必殺ゲージは命中の有無にかかわらず、技を開始した時点でCSV指定量だけ蓄積する。
-    fighter.superGauge = Math.min(
-      MAX_SUPER_GAUGE,
-      fighter.superGauge + move.superGaugeGain,
-    );
+    // 超必殺ゲージも技を開始したフレームにだけ消費する。
+    // super_gauge_gain は、ガードされなかった実ヒット時に applyHit で加算する。
+    fighter.superGauge -= move.superGaugeCost;
     if (
       this.training &&
       this.trainingAutoSpecialGaugeRecovery &&
@@ -1006,11 +1015,15 @@ export class MatchSimulation implements DeterministicSimulation {
   }
 
   /** 技のCSV消費量を支払える残量があるかを返す。 */
-  private hasSpecialGaugeForMove(
+  /** 技の発動に必要な必殺技・超必殺ゲージが両方とも足りているかを返す。 */
+  private hasGaugeForMove(
     fighter: FighterState,
     move: MoveDefinition,
   ): boolean {
-    return fighter.specialGauge >= move.specialGaugeCost;
+    return (
+      fighter.specialGauge >= move.specialGaugeCost &&
+      fighter.superGauge >= move.superGaugeCost
+    );
   }
 
   /** 最大値未満の必殺技ゲージを、60FPS固定で毎秒1ポイント回復する。 */
@@ -1031,6 +1044,38 @@ export class MatchSimulation implements DeterministicSimulation {
       fighter.specialGauge + 1,
     );
     fighter.specialGaugeRecoveryFrames = 0;
+  }
+
+  /** 超必殺ゲージを最大値を超えない範囲で加算する。 */
+  private gainSuperGauge(fighter: FighterState, amount: number): void {
+    fighter.superGauge = Math.min(MAX_SUPER_GAUGE, fighter.superGauge + amount);
+  }
+
+  /** 連続した前歩き5Fごとに、超必殺ゲージを1加算する。 */
+  private updateSuperGaugeFromForwardWalk(
+    fighter: FighterState,
+    input: FrameInput,
+  ): void {
+    const forwardWalking =
+      fighter.action === "walk" &&
+      fighter.y === GROUND_Y * POSITION_SCALE &&
+      fighter.velocityY === 0 &&
+      this.horizontalDirection(input) === fighter.facing;
+    if (!forwardWalking) {
+      fighter.superGaugeForwardWalkFrames = 0;
+      return;
+    }
+
+    fighter.superGaugeForwardWalkFrames += 1;
+    if (
+      fighter.superGaugeForwardWalkFrames <
+      SUPER_GAUGE_FORWARD_WALK_GAIN_INTERVAL_FRAMES
+    ) {
+      return;
+    }
+
+    this.gainSuperGauge(fighter, 1);
+    fighter.superGaugeForwardWalkFrames = 0;
   }
 
   /** 命中技から、moves.csvのcancel_intoで許可された種別へキャンセルできるか返す。 */
@@ -1419,6 +1464,7 @@ export class MatchSimulation implements DeterministicSimulation {
       guardSelfKnockbackX: move.guardSelfKnockbackX,
       hitstun: move.hitstun,
       guardStun: move.guardStun,
+      superGaugeGain: move.superGaugeGain,
     });
   }
 
@@ -1489,6 +1535,7 @@ export class MatchSimulation implements DeterministicSimulation {
       | "guardSelfKnockbackX"
       | "hitstun"
       | "guardStun"
+      | "superGaugeGain"
     >,
     defenderInput: FrameInput,
     /** 弱・強の命中なら、キャンセル成否までノックバックを保留する。 */
@@ -1509,6 +1556,8 @@ export class MatchSimulation implements DeterministicSimulation {
       guardStance !== null &&
       this.canGuardAttack(guardStance, attack.attackLevel);
     if (!defending) {
+      // 技ごとの超必殺ゲージは、ガードされずに実ヒットした場合だけ加算する。
+      this.gainSuperGauge(attacker, attack.superGaugeGain);
       if (attack.hitstun > HIT_STOP_HITSTUN_THRESHOLD) {
         // 同一フレームに複数の強い攻撃が重なっても、静止時間は常に5Fに固定する。
         this.hitStopFrames = Math.max(this.hitStopFrames, HIT_STOP_FRAMES);

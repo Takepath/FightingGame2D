@@ -234,8 +234,8 @@ PNGを表示する場合は`render_type=sprite`、`asset=data/projectiles/river_
 ここでは主要列だけを説明します。`invincible_frames`、ガード時硬直・ノックバック、ゲージ、キャンセルなどを含む完全な一覧は[CSV設定項目一覧](../public/data/CSV設定項目一覧.txt)を参照してください。
 
 ```csv
-character_id,move_id,button,startup,active,recovery,invincible_frames,damage,special_gauge_cost,super_gauge_gain,guard_bleak,starter_proration,range_x,range_y,self_move_x,self_move_y,self_move_speed,self_move_easing,knockback_x,knockback_y,guard_knockback_x,guard_self_knockback_x,hitstun,guard_stun,animation,attack_type,projectile_speed,projectile_lifetime,use_state,attack_level,projectile_id,command_id,cancel_into
-river_guard,river_shot,special,10,2,28,0,1100,10,15,false,0,0,0,0,0,0,linear,390,220,130,0,27,14,special,projectile,700,105,ground,mid,river_shot,river_shot,
+character_id,move_id,button,startup,active,recovery,invincible_frames,damage,special_gauge_cost,super_gauge_cost,super_gauge_gain,guard_bleak,starter_proration,range_x,range_y,self_move_x,self_move_y,self_move_speed,self_move_easing,knockback_x,knockback_y,guard_knockback_x,guard_self_knockback_x,hitstun,guard_stun,animation,attack_type,projectile_speed,projectile_lifetime,use_state,attack_level,projectile_id,command_id,cancel_into
+river_guard,river_shot,special,10,2,28,0,1100,10,0,15,false,0,0,0,0,0,0,linear,390,220,130,0,27,14,special,projectile,700,105,ground,mid,river_shot,river_shot,
 ```
 
 `moves.csv` の主要列は次のとおりです。
@@ -248,6 +248,8 @@ river_guard,river_shot,special,10,2,28,0,1100,10,15,false,0,0,0,0,0,0,linear,390
 | `startup` / `active` / `recovery`          | 発生・持続・硬直。すべて60FPS固定フレームです。                                                 |
 | `damage`                                   | ダメージ。`500` を指定すると500ダメージとなり、割合換算はしません。                             |
 | `special_gauge_cost`                       | 必殺技ゲージの消費量。0〜100の整数で、残量不足時は技を出せません。                              |
+| `super_gauge_cost`                         | 超必殺ゲージの消費量。0〜300の整数で、残量不足時は技を出せません。                              |
+| `super_gauge_gain`                         | 超必殺ゲージの増加量。0〜300の整数で、相手にガードされず命中した時だけ加算されます。            |
 | `guard_bleak`                              | `true` ならガードを貫通、`false` なら上中下属性に従ってガード可能。                             |
 | `starter_proration`                        | 始動補正率。`20`なら120%、`-10`なら90%からコンボ減衰を開始します。                              |
 | `range_x` / `range_y`                      | 近接技の前方リーチ・上下判定。                                                                  |

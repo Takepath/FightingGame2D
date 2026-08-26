@@ -55,6 +55,7 @@ const MOVE_HEADERS = [
   "invincible_frames",
   "damage",
   "special_gauge_cost",
+  "super_gauge_cost",
   "super_gauge_gain",
   "guard_bleak",
   "starter_proration",
@@ -613,6 +614,11 @@ function parseMoves(source: string): MoveDefinition[] {
           max: FIGHTING_GAME_CONFIG.match.gauges.specialMax,
         },
       ),
+      superGaugeCost: dataNumber(row, "super_gauge_cost", "moves.csv", line, {
+        integer: true,
+        min: 0,
+        max: FIGHTING_GAME_CONFIG.match.gauges.superMax,
+      }),
       superGaugeGain: dataNumber(row, "super_gauge_gain", "moves.csv", line, {
         integer: true,
         min: 0,
