@@ -5,3 +5,6 @@
 *.mjs text eol=lf
 *.js text eol=lf
 *.html text eol=lf
+
+# Windowsバッチは日本語コメントをCMDで正しく扱えるようCP932・CRLFで展開する。
+*.bat text working-tree-encoding=CP932 eol=crlf

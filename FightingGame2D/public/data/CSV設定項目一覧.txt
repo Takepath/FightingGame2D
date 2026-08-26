@@ -24,9 +24,9 @@ character_idから参照されるため、既存のidを変更する場合は mo
 列名                 内容
 id                   キャラクターを識別する一意のIDです。64文字以内の半角英数字・_・-を使用し、予約語 all は指定できません。
 name                 対戦画面・選択画面に表示するキャラクター名です。
-render_type          描画方式です。stick はプログラム描画の棒人間、blender はBlenderアニメーションJSONを使用します。
-animation_asset      render_type=blender のときに読み込むアニメーションJSONのパスです。stickでは空欄にできます。
-icon_asset           キャラクター選択画面のPNGアイコンのパスです。空欄の場合は既定アイコンを使用します。
+render_type          描画方式です。stick はプログラム描画の棒人間、blender は状態別PNGまたはBlenderアニメーションJSONを使用します。
+animation_asset      render_type=blender のときに読み込むアニメーションJSONのパスです。public/data/characters/<id>/<状態>/ にPNG連番があれば状態別PNGを優先し、フォルダなし・空の場合はJSONの単体PNG方式へ戻ります。stickでは空欄にできます。
+icon_asset           キャラクター選択画面のPNGアイコンのパスです。data/characters/<id>/icon.png のようにキャラクターIDと同名フォルダへ置くことを推奨します。空欄の場合は既定アイコンを使用します。
 primary_color        キャラクターの基本色です。#RRGGBB形式で指定します。カラー選択の「デフォルト」に使われます。
 accent_color         キャラクターの差し色です。#RRGGBB形式で指定します。カラー選択の「デフォルト」に使われます。
 max_health           最大体力です。HPバーおよびラウンド開始時の体力に使用する1以上の整数です。

@@ -213,9 +213,9 @@ export interface BlenderSpriteAnimation {
   anchor: readonly [number, number];
   /** キャラクター名を表示する足元基準のY座標（ピクセル）。 */
   nameplateY?: number;
-  /** 1つのポーズを表示する60FPS基準のフレーム数。 */
+  /** 状態別PNGがない時、JSONの1ポーズを表示する60FPS基準のフレーム数。 */
   frameDuration: number;
-  /** アクションごとの補間済みポーズ一覧。 */
+  /** 状態別PNGがない時に使う、アクションごとの補間済み単体画像ポーズ一覧。 */
   animations: Partial<Record<FighterAction, readonly BlenderSpritePose[]>>;
 }
 
@@ -227,6 +227,11 @@ export interface BlenderAnimationData {
   animations: Record<string, BlenderAnimationFrame[]>;
   /** 画像ベースで再生するBlenderアニメーション定義。未指定時は棒人間へフォールバックする。 */
   sprite?: BlenderSpriteAnimation;
+  /**
+   * public/data/characters/<character-id>/<state>/*.png から生成した状態別連番。
+   * JSONには保存せず、存在しない・空の状態はspriteの単体PNGポーズへフォールバックする。
+   */
+  spriteFrames?: Partial<Record<FighterAction, readonly string[]>>;
 }
 
 export interface GameData {

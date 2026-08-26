@@ -1,5 +1,7 @@
 import { Assets } from "pixi.js";
 
+import characterFrameManifest from "virtual:fighting-game-character-frames";
+
 import { gameAssetUrl } from "./assets";
 import { csvRecords } from "./csv";
 import { FIGHTING_GAME_CONFIG, MAX_SUPPORTED_CHARACTERS } from "./gameConfig";
@@ -237,6 +239,25 @@ const commandDirections = new Set<CommandDirection>([
   "9",
 ]);
 
+/** キャラクター状態フォルダ・技CSV・描画で共有する、対応済み状態名の一覧。 */
+const FIGHTER_ACTIONS = [
+  "idle",
+  "walk",
+  "jump",
+  "light",
+  "heavy",
+  "special",
+  "hit",
+  "block",
+  "crouchBlock",
+  "ko",
+] as const satisfies readonly FighterAction[];
+
+/** 文字列がゲームで再生できるキャラクター状態名かを判定する。 */
+function isFighterAction(value: string): value is FighterAction {
+  return FIGHTER_ACTIONS.includes(value as FighterAction);
+}
+
 /**
  * テキストファイルを読み込む
  * 読み込みに失敗した場合は例外を送出する
@@ -252,22 +273,7 @@ async function loadText(path: string): Promise<string> {
  * 検証済みのCSVアニメーション名をFighterAction型へ変換する。
  */
 function toAction(value: string): FighterAction {
-  const known: FighterAction[] = [
-    "idle",
-    "walk",
-    "jump",
-    "light",
-    "heavy",
-    "special",
-    "hit",
-    "block",
-    "crouchBlock",
-    "ko",
-  ];
-
-  return known.includes(value as FighterAction)
-    ? (value as FighterAction)
-    : "idle";
+  return isFighterAction(value) ? value : "idle";
 }
 
 /** 検証済みのuse_stateを、技の使用可能状態へ変換する。 */
@@ -416,19 +422,7 @@ function parseMoves(source: string): MoveDefinition[] {
       );
     }
     const animationName = requiredText(row, "animation", "moves.csv", line);
-    const knownAnimations: readonly FighterAction[] = [
-      "idle",
-      "walk",
-      "jump",
-      "light",
-      "heavy",
-      "special",
-      "hit",
-      "block",
-      "crouchBlock",
-      "ko",
-    ];
-    if (!knownAnimations.includes(animationName as FighterAction)) {
+    if (!isFighterAction(animationName)) {
       dataError(
         "moves.csv",
         line,
@@ -967,7 +961,51 @@ function validateBlenderAnimationData(
   }
 }
 
-/** 選択されたBlenderキャラクターだけJSON・PNGを読み、失敗時は棒人間へ戻す。 */
+/**
+ * Viteが生成したPNG一覧から、指定キャラクターが使える状態別連番だけを取り出す。
+ * 未対応のフォルダ名・空フォルダは無視し、各状態は従来JSONへフォールバックさせる。
+ */
+function spriteFramesForCharacter(
+  characterId: string,
+): Partial<Record<FighterAction, readonly string[]>> {
+  const manifestEntry = characterFrameManifest[characterId];
+  if (!manifestEntry) return {};
+
+  const spriteFrames: Partial<Record<FighterAction, readonly string[]>> = {};
+  for (const [action, paths] of Object.entries(manifestEntry)) {
+    if (!isFighterAction(action) || paths.length === 0) continue;
+    spriteFrames[action] = paths;
+  }
+  return spriteFrames;
+}
+
+/**
+ * 状態別PNGをアクション単位で先行読込する。
+ * 一部のPNGが壊れていても、その状態だけJSON単体画像方式へ戻し、キャラクター全体は表示し続ける。
+ */
+async function preloadSpriteFrames(
+  character: CharacterDefinition,
+  spriteFrames: Partial<Record<FighterAction, readonly string[]>>,
+): Promise<Partial<Record<FighterAction, readonly string[]>>> {
+  const loadedFrames: Partial<Record<FighterAction, readonly string[]>> = {};
+  await Promise.all(
+    Object.entries(spriteFrames).map(async ([action, paths]) => {
+      if (!isFighterAction(action)) return;
+      try {
+        await Promise.all(paths.map((path) => Assets.load(gameAssetUrl(path))));
+        loadedFrames[action] = paths;
+      } catch (error) {
+        console.warn(
+          `${character.name} の${action} PNG連番を読み込めませんでした。JSONの単体画像方式へ戻します`,
+          error,
+        );
+      }
+    }),
+  );
+  return loadedFrames;
+}
+
+/** 選択されたBlenderキャラクターだけJSON・状態別PNGを読み、失敗時は棒人間へ戻す。 */
 export async function loadCharacterAnimation(
   character: CharacterDefinition,
 ): Promise<BlenderAnimationData | undefined> {
@@ -986,7 +1024,15 @@ export async function loadCharacterAnimation(
     if (animation.sprite?.asset) {
       await Assets.load(gameAssetUrl(animation.sprite.asset));
     }
-    return animation;
+
+    // 状態別フォルダのPNGはJSONより優先する。ただし未配置・空フォルダの状態は何も追加しない。
+    const configuredFrames = animation.sprite
+      ? spriteFramesForCharacter(character.id)
+      : {};
+    const spriteFrames = await preloadSpriteFrames(character, configuredFrames);
+    return Object.keys(spriteFrames).length > 0
+      ? { ...animation, spriteFrames }
+      : animation;
   } catch (error) {
     console.warn(
       `${error instanceof Error ? error.message : String(error)}。${character.name} は棒人間で描画します`,

@@ -23,6 +23,9 @@ const spriteColorAnalysisCache = new Map<
   Promise<SpriteColorAnalysis | null>
 >();
 
+/** 読み込み済みの解析結果を同期的に取り出し、毎フレームの非同期処理を避ける。 */
+const resolvedSpriteColorAnalysisCache = new Map<string, SpriteColorAnalysis>();
+
 /** 黒系カラーでも背景から判別できるようにする、元画像ピクセルでの輪郭幅。 */
 const BLACK_OUTLINE_SOURCE_PIXELS = 8;
 
@@ -147,7 +150,11 @@ function spriteColorAnalysisFor(
   if (!analysis) {
     analysis = analyzeSpriteColors(assetUrl).then((result) => {
       // 一時的な通信・デコード失敗は固定キャッシュせず、次回選択で再試行可能にする。
-      if (!result) spriteColorAnalysisCache.delete(assetUrl);
+      if (!result) {
+        spriteColorAnalysisCache.delete(assetUrl);
+      } else {
+        resolvedSpriteColorAnalysisCache.set(assetUrl, result);
+      }
       return result;
     });
     spriteColorAnalysisCache.set(assetUrl, analysis);
@@ -161,7 +168,17 @@ export async function preloadSpriteColorAnalysis(
 ): Promise<void> {
   const asset = animation?.sprite?.asset;
   if (!asset) return;
-  await spriteColorAnalysisFor(gameAssetUrl(asset));
+
+  // JSONの代表画像と、存在する状態別PNGをすべてVS画面中に解析して試合中のちらつきを防ぐ。
+  const assets = new Set([
+    asset,
+    ...Object.values(animation.spriteFrames ?? {}).flatMap(
+      (frames) => frames ?? [],
+    ),
+  ]);
+  await Promise.all(
+    [...assets].map((path) => spriteColorAnalysisFor(gameAssetUrl(path))),
+  );
 }
 
 /**
@@ -181,7 +198,7 @@ export class FighterView extends Container {
   /** キャラクター名表示 */
   private readonly nameplate: Text;
 
-  /** Blender書き出しJSON。スプライト形式がない場合は棒人間描画を使う。 */
+  /** 状態別PNGとJSON単体画像ポーズを持つBlender書き出しデータ。スプライト形式がない場合は棒人間描画を使う。 */
   private readonly animation?: BlenderAnimationData;
 
   /** Blenderアニメーションに連動して動かすキャラクタースプライト。 */
@@ -195,6 +212,15 @@ export class FighterView extends Container {
 
   /** 縮小した色替えマスクを元画像と同じ表示寸法へ戻す倍率。 */
   private spriteColorLayerScale = 1;
+
+  /** 現在Spriteへ設定している画像パス。状態別PNGの切替と非同期マスクの競合防止に使う。 */
+  private currentSpriteAsset?: string;
+
+  /** 色替え・白枠マスクを最後に適用した画像パス。不要なTexture再設定を避ける。 */
+  private currentColorLayerAsset?: string;
+
+  /** 現在マスク解析を待っている画像パス。同じPNGへの重複した非同期要求を防ぐ。 */
+  private pendingColorLayerAsset?: string;
 
   /** 前回反映したファイター座標。変化時だけContainer座標を更新する。 */
   private lastX = Number.NaN;
@@ -235,6 +261,7 @@ export class FighterView extends Container {
       const sprite = Sprite.from(gameAssetUrl(spriteDefinition.asset));
       sprite.anchor.set(spriteDefinition.anchor[0], spriteDefinition.anchor[1]);
       this.animatedSprite = sprite;
+      this.currentSpriteAsset = spriteDefinition.asset;
 
       const colorOverlay = new Sprite();
       colorOverlay.anchor.set(
@@ -254,9 +281,8 @@ export class FighterView extends Container {
 
       if (fighter.character.colorVariant !== "default") {
         // 色替え不要な既定色では、原寸PNGの全画素解析とマスク常駐を発生させない。
-        void this.prepareSpriteColorLayers(
-          gameAssetUrl(spriteDefinition.asset),
-        );
+        this.pendingColorLayerAsset = spriteDefinition.asset;
+        void this.prepareSpriteColorLayers(spriteDefinition.asset);
       }
     }
 
@@ -300,7 +326,7 @@ export class FighterView extends Container {
     this.body.clear();
     const spriteDefinition = this.animation?.sprite;
     if (this.animatedSprite && spriteDefinition) {
-      // Blender JSONのポーズ値で、透過PNGスプライトをアニメーションする。
+      // 状態別PNGがあれば連番を優先し、なければBlender JSONの単体画像ポーズで描画する。
       this.body.scale.set(1);
       this.updateBlenderSprite(spriteDefinition);
     } else if (this.animation) {
@@ -328,6 +354,9 @@ export class FighterView extends Container {
     const base = `${this.fighter.action}|${this.fighter.facing}|${Number(this.fighter.stun > 0)}`;
     const spriteDefinition = this.animation?.sprite;
     if (spriteDefinition) {
+      const frameAsset = this.spriteFrameAssetForCurrentAction();
+      // 状態別PNGを使う時は選択中の画像パスをキーにして、毎ゲームフレーム確実にTextureを差し替える。
+      if (frameAsset) return `${base}|png|${frameAsset}`;
       return `${base}|${this.spritePoseFrameIndex(spriteDefinition)}`;
     }
     if (this.animation) {
@@ -339,10 +368,12 @@ export class FighterView extends Container {
       : base;
   }
 
-  /** 初回画像解析で作ったマスクをスプライトへ設定する。 */
-  private async prepareSpriteColorLayers(assetUrl: string): Promise<void> {
-    const analysis = await spriteColorAnalysisFor(assetUrl);
-    if (!analysis || this.destroyed) return;
+  /** 解析済みの色替え・白枠マスクを、現在のスプライトへ同期する。 */
+  private applySpriteColorLayers(
+    asset: string,
+    analysis: SpriteColorAnalysis,
+  ): void {
+    if (this.destroyed) return;
 
     const colorOverlay = this.spriteColorOverlay;
     const whiteOutline = this.spriteWhiteOutline;
@@ -356,9 +387,60 @@ export class FighterView extends Container {
     whiteOutline.texture = Texture.from(analysis.whiteOutlineMask);
     whiteOutline.visible = this.usesWhiteOutline();
     this.spriteColorLayerScale = analysis.displayScale;
+    this.currentColorLayerAsset = asset;
 
     // 非同期でレイヤーを追加した直後も、次回更新で現在のポーズへ同期する。
     this.lastVisualKey = "";
+  }
+
+  /** 指定PNGのマスク解析を待ち、画像切替後にも現在表示中の画像だけへ反映する。 */
+  private async prepareSpriteColorLayers(asset: string): Promise<void> {
+    try {
+      const assetUrl = gameAssetUrl(asset);
+      const analysis =
+        resolvedSpriteColorAnalysisCache.get(assetUrl) ??
+        (await spriteColorAnalysisFor(assetUrl));
+      // 連番再生中に古いフレームの解析結果が到着しても、現在のフレームを上書きしない。
+      if (!analysis || this.destroyed || this.currentSpriteAsset !== asset)
+        return;
+      this.applySpriteColorLayers(asset, analysis);
+    } finally {
+      if (this.pendingColorLayerAsset === asset) {
+        this.pendingColorLayerAsset = undefined;
+      }
+    }
+  }
+
+  /**
+   * メイン画像・カラーオーバーレイ・白枠を同じPNGへ切り替える。
+   * VS画面で先行解析済みなら同期的に適用し、未解析時だけ非同期で準備する。
+   */
+  private setSpriteAsset(asset: string): void {
+    const animatedSprite = this.animatedSprite;
+    if (!animatedSprite) return;
+
+    if (this.currentSpriteAsset !== asset) {
+      this.currentSpriteAsset = asset;
+      animatedSprite.texture = Texture.from(gameAssetUrl(asset));
+    }
+    if (this.fighter.character.colorVariant === "default") return;
+
+    const assetUrl = gameAssetUrl(asset);
+    const analysis = resolvedSpriteColorAnalysisCache.get(assetUrl);
+    if (analysis && this.currentColorLayerAsset !== asset) {
+      this.applySpriteColorLayers(asset, analysis);
+      return;
+    }
+    if (analysis) return;
+
+    // 切替直後に前フレーム用の色マスクを残さず、解析後に正しい画像だけ再表示する。
+    this.currentColorLayerAsset = undefined;
+    if (this.spriteColorOverlay) this.spriteColorOverlay.visible = false;
+    if (this.spriteWhiteOutline) this.spriteWhiteOutline.visible = false;
+    if (this.pendingColorLayerAsset !== asset) {
+      this.pendingColorLayerAsset = asset;
+      void this.prepareSpriteColorLayers(asset);
+    }
   }
 
   /** Blender出力に含まれる、現在アクション用のスプライトポーズを取得する。 */
@@ -378,16 +460,47 @@ export class FighterView extends Container {
     return definition.animations[action] ?? definition.animations.idle ?? [];
   }
 
-  /** Blender JSONのフレーム値をスプライトへ反映する。 */
+  /** 現在状態のフォルダに置かれたPNG連番を取得する。未配置・空なら空配列を返す。 */
+  private spriteFramesForCurrentAction(): readonly string[] {
+    return this.animation?.spriteFrames?.[this.fighter.action] ?? [];
+  }
+
+  /** 待機・歩行・ガードだけをループし、それ以外の状態は最終画像で停止する。 */
+  private isLoopingSpriteAction(): boolean {
+    return (
+      this.fighter.action === "idle" ||
+      this.fighter.action === "walk" ||
+      this.fighter.action === "block" ||
+      this.fighter.action === "crouchBlock"
+    );
+  }
+
+  /** 1PNG=60FPS固定のゲーム1フレームとして、現在表示する状態別画像を選ぶ。 */
+  private spriteFrameAssetForCurrentAction(): string | undefined {
+    const frames = this.spriteFramesForCurrentAction();
+    if (frames.length === 0) return undefined;
+    const frame = this.fighter.actionFrame;
+    const index = this.isLoopingSpriteAction()
+      ? frame % frames.length
+      : Math.min(frame, frames.length - 1);
+    return frames[index];
+  }
+
+  /** Blender JSONの単体画像または状態別PNG連番をスプライトへ反映する。 */
   private updateBlenderSprite(definition: BlenderSpriteAnimation): void {
+    const frameAsset = this.spriteFrameAssetForCurrentAction();
     const poses = this.spritePosesForCurrentAction(definition);
     const fallbackPose: BlenderSpritePose = {};
     const pose =
-      poses.length === 0
+      frameAsset || poses.length === 0
         ? fallbackPose
         : poses[this.spritePoseFrameIndex(definition)];
     const mirror = this.fighter.facing;
     const scale = definition.scale * (pose.scale ?? 1);
+
+    // 連番PNGは画像自体に各フレームのポーズを含むため、JSONの位置・回転・拡縮補正は重ねない。
+    // 状態フォルダがない場合だけ、従来どおりJSON単体画像のポーズ補正を使う。
+    this.setSpriteAsset(frameAsset ?? definition.asset);
 
     // 元PNG・色オーバーレイ・白枠を完全に同じ姿勢で動かし、ずれを防ぐ。
     if (this.animatedSprite) {
@@ -413,12 +526,9 @@ export class FighterView extends Container {
     const frame = Math.floor(
       this.fighter.actionFrame / definition.frameDuration,
     );
-    const looping =
-      this.fighter.action === "idle" ||
-      this.fighter.action === "walk" ||
-      this.fighter.action === "block" ||
-      this.fighter.action === "crouchBlock";
-    return looping ? frame % poses.length : Math.min(frame, poses.length - 1);
+    return this.isLoopingSpriteAction()
+      ? frame % poses.length
+      : Math.min(frame, poses.length - 1);
   }
 
   /** 黒系カラーは背景へ溶け込まないよう、白い境界線を表示する。 */

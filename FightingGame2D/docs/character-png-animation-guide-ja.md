@@ -2,21 +2,17 @@
 
 このガイドは、2D格闘ゲーム **Frame Fighters** に新しいキャラクターを追加するための外部公開用手順です。連番PNGの作成、ゲームに使う画像の配置、アニメーションJSON・キャラクターCSV・技CSV・コマンドCSVの登録、動作確認までを扱います。
 
-対象読者は、イラストレーター、アニメーター、ゲームデザイナー、およびCSVを編集できる制作者です。TypeScriptの編集は不要です。
-
 > [!IMPORTANT]
-> 現行の `fightinggame2d-blender-sprite-v1` 形式は、**1枚の透過PNGをJSONの位置・回転・拡縮で動かす方式**です。連番PNGはポーズ設計・位置調整の元素材として用意しますが、個々のPNGをフレームごとに差し替えて再生する機能は現行版にはありません。連番PNGをそのまま再生したい場合は、ランタイム側の機能追加が必要です。
+> `public/data/characters/<character-id>/<state>/` 内のPNG連番は、**1枚を60FPSの1ゲームフレームとして直接再生**します。状態フォルダがない、またはPNGが1枚もない場合だけ、JSONで指定した単体PNGに `x`・`y`・`rotation`・`scale` を適用する方式へなります。JSONは連番PNG方式でも、共通の表示倍率・足元アンカー・名前位置・フォールバック画像を定義するために必要です。
 
 ## 1. 完成イメージと作業の流れ
 
 ```text
-連番PNGを作る
+状態ごとにPNGを連番で書き出す
   ↓
-基準ポーズの透過PNGを選ぶ
+public/data/characters/<character-id>/<state>/ に配置
   ↓
-public/data/characters/<character-id>/ に配置
-  ↓
-public/data/animations/<character-id>.json を作る
+フォールバック用単体PNGとJSONを用意する
   ↓
 characters.csv にキャラクターを1行追加
   ↓
@@ -75,29 +71,40 @@ git diff --check
 | `ko`          | KO                                |
 
 ### 3.2 推奨するファイル構成
-
 連番PNGは、同じキャンバスサイズ・同じ解像度・同じ足元位置で書き出します。例えば1024×1024pxを使う場合は、すべての画像で靴底または足先を同じY座標にそろえます。
 
 ```text
 public/data/characters/river_guard/
-├─ idle_000.png
-├─ idle_001.png
-├─ idle_002.png
-├─ idle_003.png
-├─ walk_000.png
-├─ walk_001.png
-├─ walk_002.png
-├─ walk_003.png
-├─ jump_000.png
-├─ light_000.png
-├─ light_001.png
-├─ heavy_000.png
-├─ heavy_001.png
-├─ special_000.png
-└─ icon.png
+├─ fallback.png
+├─ icon.png
+├─ idle/
+│  ├─ 000.png
+│  ├─ 001.png
+│  ├─ 002.png
+│  └─ 003.png
+├─ walk/
+│  ├─ 000.png
+│  ├─ 001.png
+│  ├─ 002.png
+│  └─ 003.png
+├─ jump/
+│  └─ 000.png
+├─ light/
+│  ├─ 000.png
+│  └─ 001.png
+├─ heavy/
+│  ├─ 000.png
+│  └─ 001.png
+└─ special/
+   └─ 000.png
 ```
 
-ファイル名の連番は、`000`、`001`、`002` のように桁数をそろえます。素材管理ツールやBlenderから連番を読み込むときに順序を間違えにくくなります。
+フォルダ名は `characters.csv` の `id` と状態名に完全一致させます。ファイル名の連番は、`000.png`、`001.png`、`002.png` のように桁数をそろえます。開発サーバー起動時・製品ビルド時にゲームが自動でPNGを走査し、自然順で再生するため、マニフェストの作成は不要です。
+
+- `idle`・`walk`・`block`・`crouchBlock` は先頭へ戻ってループします。
+- `jump`・`light`・`heavy`・`special`・`hit`・`ko` は最後のPNGで停止します。
+- 状態フォルダがない、またはPNGが0枚なら、その**状態だけ**JSON単体画像方式へフォールバックします。`crouchBlock` のJSONポーズは、従来どおり `crouchBlock` → `block` → `idle` の順で補います。
+- フォルダやPNGを開発中に追加・削除した場合は、開発サーバーが画面を再読込して一覧を更新します。
 
 ### 3.3 画像作成時のルール
 
@@ -109,15 +116,15 @@ public/data/characters/river_guard/
 - `icon.png` はキャラクター選択用です。正方形・透過PNGを推奨します。
 - 他者が作った画像、生成画像、フォント、ロゴを公開する場合は、利用規約・ライセンス・クレジット要件を必ず確認します。
 
-### 3.4 現行版でゲーム表示に使うPNGを選ぶ
+### 3.4 フォールバック用の単体PNGを用意する
 
-現行版は連番PNGを直接切り替えないため、各アクションの基準となる立ち絵を1枚選びます。通常は `idle_000.png` を使用します。
+`fallback.png` のような単体PNGを、状態フォルダの外へ1枚配置します。これは全状態のフォルダが未配置・空・読込失敗した時に使う画像です。
 
 ```text
-public/data/characters/river_guard/idle_000.png
+public/data/characters/river_guard/fallback.png
 ```
 
-残りの連番PNGは、JSONに書く `x`・`y`・`rotation`・`scale` の値を設計・確認するための原画として保管します。フレームごとの絵を直接再生する仕様を追加した場合にも、そのまま利用できます。
+状態別連番がある場合、画像自体にポーズを含めるためJSONのアクション別 `x`・`y`・`rotation`・`scale` は適用されません。フォルダがない状態だけ、これらのJSONポーズで単体PNGを拡大縮小・移動・回転します。
 
 ## 4. スプライトアニメーションJSONを作る
 
@@ -129,7 +136,7 @@ public/data/characters/river_guard/idle_000.png
   "fps": 60,
   "animations": {},
   "sprite": {
-    "asset": "data/characters/river_guard/idle_000.png",
+    "asset": "data/characters/river_guard/fallback.png",
     "scale": 0.18,
     "anchor": [0.5, 0.92],
     "nameplateY": -210,
@@ -178,20 +185,20 @@ public/data/characters/river_guard/idle_000.png
 | --------------- | --------------------------------------------------------------------------- |
 | `format`        | 現行スプライト形式は `fightinggame2d-blender-sprite-v1`                     |
 | `fps`           | 必ず `60`。ゲームの固定シミュレーションと一致させます。                     |
-| `asset`         | 代表となる透過PNGのパス                                                     |
+| `asset`         | 状態別PNGがない時に使う、代表の透過PNGパス                                  |
 | `scale`         | 元画像への表示倍率。大きすぎる・小さすぎる場合に調整します。                |
 | `anchor`        | 画像の基準点。`[0.5, 0.92]` なら横中央・画像高の92%を足元として扱います。   |
 | `nameplateY`    | キャラクター名のY座標。背が高いキャラクターほど小さい値（上方向）にします。 |
-| `frameDuration` | JSONの1ポーズを何フレーム表示するか。`6` は60FPSで10ポーズ/秒です。         |
-| `x`, `y`        | 基準位置からの移動量（ピクセル）。正のYは下方向です。                       |
-| `rotation`      | 回転量（ラジアン）。右向き基準で設定し、左向きは自動反転されます。          |
-| `scale`         | JSON全体の `scale` に掛ける倍率です。                                       |
+| `frameDuration` | JSON単体画像方式で、1ポーズを何フレーム表示するか。`6` は60FPSで10ポーズ/秒です。 |
+| `x`, `y`        | JSON単体画像方式の基準位置からの移動量（ピクセル）。正のYは下方向です。     |
+| `rotation`      | JSON単体画像方式の回転量（ラジアン）。右向き基準で設定し、左向きは自動反転されます。 |
+| `scale`         | JSON単体画像方式のJSON全体 `scale` に掛ける倍率です。                       |
 
 `crocodile_soldier.json` は、実装済みキャラクターの参照例です。
 
 ## 5. characters.csvにキャラクターを登録する
 
-`public/data/characters.csv` の末尾に1行追加します。`render_type` を `blender` にすると、`animation_asset` のJSONを読み込みます。
+`public/data/characters.csv` の末尾に1行追加します。`render_type` を `blender` にすると、`animation_asset` のJSONを読み込み、同じ `id` の `public/data/characters/<id>/<state>/` を状態別PNGの配置先として自動参照します。
 
 ```csv
 river_guard,RIVER GUARD,blender,data/animations/river_guard.json,data/characters/river_guard/icon.png,#4A9B73,#E9B949,10000,315,1880,64,168,20
@@ -203,8 +210,8 @@ river_guard,RIVER GUARD,blender,data/animations/river_guard.json,data/characters
 | -------------------------------- | -------------------------------------------------------- |
 | `id`                             | 内部ID。英小文字・数字・アンダースコアを推奨。重複禁止。 |
 | `name`                           | 対戦画面・選択画面に表示する名前。                       |
-| `render_type`                    | JSONを使う場合は `blender`、棒人間は `stick`。           |
-| `animation_asset`                | JSONへの公開パス。                                       |
+| `render_type`                    | 状態別PNG／JSONを使う場合は `blender`、棒人間は `stick`。 |
+| `animation_asset`                | 共通表示設定と単体PNGフォールバックを持つJSONへの公開パス。 |
 | `icon_asset`                     | 選択画面のアイコンPNGへの公開パス。                      |
 | `primary_color` / `accent_color` | `#RRGGBB`形式の基本色・差し色。                          |
 | `max_health`                     | 最大体力。`damage` と同じ実数HPポイントで指定します。    |
@@ -295,7 +302,7 @@ river_shot,2>3>6,18,10,0
 3. 「ローカル対戦」または「トレーニング」を選びます。
 4. 追加したキャラクターを選択します。
 5. VS画面で色とアイコンを確認します。
-6. 対戦画面で待機・歩き・ジャンプ・弱・強・必殺技・被弾・KOを確認します。
+6. 対戦画面で待機・歩き・ジャンプ・弱・強・必殺技・被弾・KOを確認します。状態別PNGがある状態は、1枚ずつ60FPS固定で切り替わることを確認します。
 7. 名前が頭部や相手キャラクターの名前と重なる場合は、JSONの `nameplateY` を小さくします。
 8. 足が地面に接しない場合は、`anchor` のY値を調整します。値を小さくするとスプライトは下がり、大きくすると上がります。
 9. 攻撃が見た目より遠い・近い場合は、`range_x`、`range_y`、`hurtbox_width`、`hurtbox_top`、`hurtbox_bottom` を調整します。
@@ -314,6 +321,8 @@ git diff --check
 - [ ] 使用した画像・Blender素材・生成画像の利用権とクレジット条件を確認した。
 - [ ] `characters.csv` のIDに重複がない。
 - [ ] `animation_asset` と `icon_asset` のパスが実在する。
+- [ ] PNGフォルダ名がキャラクターID・対応済み状態名と完全一致し、各状態の連番が `000.png` から自然順に並ぶ。
+- [ ] 状態別PNGを置かない状態でも、JSONの `asset` が単体PNGを指しておりフォールバックできる。
 - [ ] `moves.csv` の `character_id` が `characters.csv` のIDと一致している。
 - [ ] 飛び道具技の`projectile_id`が`projectiles.csv`のIDと一致している。
 - [ ] `command_id` を使う場合、`commands.csv` に重複なしで定義されている。
@@ -326,12 +335,12 @@ git diff --check
 | 症状                             | 原因と解決                                                                                                                                              |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 選択画面にアイコンが出ない       | `icon_asset` は `public` 配下からの相対パスです。拡張子・大文字小文字・`/`区切りを確認します。                                                          |
-| 棒人間で表示される               | `render_type=blender`、`animation_asset` のパス、JSON構文、PNGのパスを確認します。ブラウザーの開発者ツールのNetworkも確認します。                       |
+| 棒人間で表示される               | `render_type=blender`、`animation_asset` のパス、JSON構文、JSONの `asset` の単体PNGを確認します。状態別PNGだけが壊れている場合は棒人間ではなくJSON方式へ戻ります。 |
 | 足が浮く・地面に埋まる           | 全フレームの足元をそろえ、JSONの `anchor[1]` を調整します。                                                                                             |
 | 名前がキャラクターに重なる       | `nameplateY` をより小さい値にします。例: `-184` → `-220`。                                                                                              |
 | 固有技ではなく共通技の性能になる | `moves.csv` の `character_id` と `move_id`、重複行がないかを確認します。                                                                                |
 | コマンド技が出ない               | `commands.csv` の `command_id`、テンキー表記、`max_frames`、最後の方向入力から技ボタンまでが6フレーム以内か、`moves.csv` の `command_id` を確認します。 |
-| 連番PNGが切り替わらない          | 現行版の仕様です。JSONのポーズ補正で表現するか、連番PNG切替機能を実装してください。                                                                     |
+| 連番PNGが切り替わらない          | `public/data/characters/<characters.csvのid>/<state>/` の順になっているか、状態フォルダにPNGが1枚以上あるか、拡張子と大文字小文字を確認します。開発中に追加した場合は画面を再読込します。 |
 
 ## 付録: Blender Armatureを使う場合
 
@@ -341,4 +350,4 @@ BlenderのArmature Actionを骨格JSONとして出力する場合は、同梱の
 blender --background Fighter.blend --python tools/blender_export_fighting_animation.py -- --armature Armature --output public/data/animations/river_guard.json
 ```
 
-Blenderでは正面視点を `X=横、Z=縦` とし、Action名を `idle`、`walk`、`jump`、`light`、`heavy`、`special`、`hit`、`block`、`crouchBlock`、`ko` に合わせます。`crouchBlock`を省略した場合は`block`を再生します。PNGスプライトJSON方式とArmature骨格JSON方式は、同じ `animation_asset` 列から読み込めますが、1キャラクターにつきどちらか1方式を選んでください。
+Blenderでは正面視点を `X=横、Z=縦` とし、Action名を `idle`、`walk`、`jump`、`light`、`heavy`、`special`、`hit`、`block`、`crouchBlock`、`ko` に合わせます。`crouchBlock`を省略した場合は`block`を再生します。Armature骨格JSONとPNGスプライトJSONは同じ `animation_asset` 列から読み込めます。PNGスプライトJSONを使う場合は、さらに `public/data/characters/<character-id>/<state>/` にPNG連番を置くと、その状態だけ連番再生が優先されます。

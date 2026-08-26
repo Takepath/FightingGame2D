@@ -3,7 +3,7 @@
   "fps": 60,
   "animations": {},
   "sprite": {
-    "asset": "data/characters/crocodile-soldier.png",
+    "asset": "data/characters/crocodile_soldier/fallback.png",
     "scale": 0.17,
     "anchor": [0.5, 0.905],
     "nameplateY": -220,
