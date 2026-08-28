@@ -1,0 +1,10 @@
+/.gitattributes text eol=lf
+
+# Prettier の検査対象ソースは、OSにかかわらずLFで作業ツリーへ展開する。
+*.ts text eol=lf
+*.mjs text eol=lf
+*.js text eol=lf
+*.html text eol=lf
+
+# Windowsバッチは日本語コメントをCMDで正しく扱えるようCP932・CRLFで展開する。
+*.bat text working-tree-encoding=CP932 eol=crlf
