@@ -114,9 +114,17 @@ Top画面で「ローカル対戦」を選ぶと、キャラクター選択画�
 
 `moves.csv` の `range_y` と `knockback_x` の間には、自キャラ移動を設定する `self_move_x` / `self_move_y` / `self_move_speed` / `self_move_easing` があります。`x` と `y` は進行方向の比率（正のXは前方、正のYは上方）、`self_move_speed` は実際の速度（px/秒）です。`self_move_easing` は `linear`（一定）・`accelerate`（加速）・`decelerate`（減速）・`arc`（開始・終了時が遅い山なり）から選べます。自キャラ移動はstartup終了時、つまり最初のactiveフレームから開始し、技の終了直前まで再生されます。移動しない技は `x=0`、`y=0`、`speed=0` を指定してください。
 
+## 暗転演出CSV
+
+`moves.csv` の `recovery` の直後にある `blackout_frames` は、技開始時に背景を黒一色へ切り替える60FPS固定の演出フレーム数です。0なら演出を行いません。暗転中はHUD・ラウンド表示・入力履歴・飛び道具を非表示にし、技を出した側は `cinematic` 状態のアニメーションを再生します。相手側を含む他のゲーム進行は完全に停止するため、空中の相手も落下しません。暗転が終了してから、技本体のstartupを0Fから進めます。
+
 ## 無敵フレームCSV
 
-moves.csv の recovery の直後にある invincible_frames は、技を開始してから全攻撃（打撃・飛び道具・投げ）を受けないフレーム数です。0で無敵なしとなり、技の全体フレーム（startup + active + recovery）を超える値は設定できません。標準の昇竜拳には、上昇中をカバーする25Fを設定しています。
+`moves.csv` の `blackout_frames` の直後にある `invincible_frames` は、技を開始してから全攻撃（打撃・飛び道具・投げ）を受けないフレーム数です。0で無敵なしとなり、技の全体フレーム（startup + active + recovery）を超える値は設定できません。標準の昇竜拳には、上昇中をカバーする25Fを設定しています。
+
+## ダウンCSV
+
+`moves.csv` の `hitstun` の直後にある `down_frames` は、非ガード命中後に接地してからダウン状態を維持する60FPS固定フレーム数です。0なら通常の被弾復帰です。ダウン技は既存の `knockback_x` / `knockback_y` で技方向へ吹き飛ばし、接地後の前半は横たわり、後半は立ち上がります。ダウン中は完全無敵となるため、打撃・飛び道具・投げ・`guard_bleak=true` の攻撃も受けず、技・キャンセル・ガードもできません。共通投げには動作確認用として `60` を設定しています。
 
 ## ガード時CSV
 
@@ -156,6 +164,6 @@ Webブラウザーは `.blend` を直接再生できないため、同梱の [bl
 blender --background Fighter.blend --python tools/blender_export_fighting_animation.py -- --armature Armature --output public/data/animations/my_fighter.json
 ```
 
-Blender側では正面視点を `X=横、Z=縦` とし、Action名を `idle`、`walk`、`jump`、`light`、`heavy`、`special`、`hit`、`block`、`crouchBlock`、`ko` のいずれかにします。`moves.csv` の `animation` も同じ対応済み名を指定してください。書き出したパスを `characters.csv` の `animation_asset` 列に設定すると、骨格アニメーションが再生されます。
+Blender側では正面視点を `X=横、Z=縦` とし、Action名を `idle`、`walk`、`jump`、`light`、`heavy`、`special`、`hit`、`block`、`crouchBlock`、`cinematic`、`down`、`ko` のいずれかにします。`cinematic` は `blackout_frames` を設定した技の暗転中に攻撃側へ、`down` はダウン中の被撃側へ再生されます。`moves.csv` の `animation` も同じ対応済み名を指定してください。書き出したパスを `characters.csv` の `animation_asset` 列に設定すると、骨格アニメーションが再生されます。
 
 PNGを使うキャラクターでは、同じJSONに `sprite` を追加します。`public/data/characters/<characters.csvのid>/<state>/` に `000.png` からの連番を置くと、1PNGを60FPS固定の1ゲームフレームとして直接再生します。`idle`・`walk`・`block`・`crouchBlock` はループし、その他は最終PNGで停止します。状態フォルダが存在しない、またはPNGが0枚なら、JSONの `asset` を単体画像として `frameDuration` とアクションごとの `x / y / rotation / scale` で従来どおり再生します。JSONの `scale`・`anchor`・`nameplateY` は両方式で共通です。`crocodile_soldier.json` を編集例として参照してください。非デフォルト色の解析マスクは `gameConfig.ts` の `presentation.spriteColorMaskMaxDimension` を長辺上限として縮小し、VS画面中に先行生成します。

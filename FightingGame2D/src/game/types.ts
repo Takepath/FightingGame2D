@@ -56,6 +56,8 @@ export type FighterAction =
   | "hit"
   | "block"
   | "crouchBlock"
+  | "cinematic"
+  | "down"
   | "ko";
 
 /** 技を出せる状態。any は地上・空中のどちらでも使用できる。 */
@@ -112,6 +114,8 @@ export interface MoveDefinition {
   startup: number;
   active: number;
   recovery: number;
+  /** 技開始時に背景を暗転させる演出フレーム数。0なら暗転演出を行わない。 */
+  blackoutFrames: number;
   /** 技開始からこのフレーム数の間、投げを含む全ての攻撃を受けない。 */
   invincibleFrames: number;
   /** HPと同じ実数ポイントで扱うダメージ量。例: 500 は 500 HP のダメージ。 */
@@ -120,6 +124,8 @@ export interface MoveDefinition {
   specialGaugeCost: number;
   /** 最大300の超必殺ゲージから、技開始時に消費する量。0なら消費しない。 */
   superGaugeCost: number;
+  /** 超必殺ゲージ消費技だけに適用する、コンボ補正後ダメージの実数値下限。0なら通常どおり。 */
+  superComboMinimumDamage: number;
   /** 最大300の超必殺ゲージへ、ガードされず命中した時に加算する量。0なら増えない。 */
   superGaugeGain: number;
   /** trueなら後ろ入力ガードを無視してダメージを与える。投げは必ずtrueにする。 */
@@ -147,6 +153,8 @@ export interface MoveDefinition {
   /** ガードされた攻撃側を後方へ押す横方向の速度。 */
   guardSelfKnockbackX: number;
   hitstun: number;
+  /** 接地後にダウン状態として過ごすフレーム数。0なら通常の被弾復帰を行う。 */
+  downFrames: number;
   /** ガード成功側が入力を受け付けないフレーム数。0なら硬直なし。 */
   guardStun: number;
   animation: FighterAction;

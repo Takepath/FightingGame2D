@@ -303,6 +303,11 @@ export class FighterView extends Container {
     this.nameplate.position.set(0, spriteDefinition?.nameplateY ?? -184);
   }
 
+  /** 暗転演出中に、HUD扱いとなるキャラクター名だけを表示・非表示する。 */
+  public setNameplateVisible(visible: boolean): void {
+    this.nameplate.visible = visible;
+  }
+
   //====================================================
   // 毎フレーム更新
   //====================================================
@@ -357,15 +362,45 @@ export class FighterView extends Container {
       const frameAsset = this.spriteFrameAssetForCurrentAction();
       // 状態別PNGを使う時は選択中の画像パスをキーにして、毎ゲームフレーム確実にTextureを差し替える。
       if (frameAsset) return `${base}|png|${frameAsset}`;
+      if (
+        this.fighter.action === "down" &&
+        !(spriteDefinition.animations.down?.length ?? 0)
+      ) {
+        // down用ポーズがない場合はidleを回転させるため、補間角度が変わる毎フレームを再描画する。
+        return `${base}|downFallback|${this.fighter.actionFrame}`;
+      }
       return `${base}|${this.spritePoseFrameIndex(spriteDefinition)}`;
     }
     if (this.animation) {
       // 同じ骨格ポーズを表示する硬直中は、Graphicsを再テッセレーションしない。
+      if (
+        this.fighter.action === "down" &&
+        !(this.animation.animations.down?.length ?? 0)
+      ) {
+        return `${base}|downFallback|${this.fighter.actionFrame}`;
+      }
       return `${base}|${this.blenderPoseFrameIndex() ?? "fallback"}`;
     }
-    return this.fighter.action === "walk"
+    return this.fighter.action === "walk" ||
+      this.fighter.action === "cinematic" ||
+      this.fighter.action === "down"
       ? `${base}|${this.fighter.actionFrame % 16}`
       : base;
+  }
+
+  /** ダウン状態の前半で横たわり、後半で立ち姿勢へ戻す共通の回転量を返す。 */
+  private downRotation(): number {
+    if (this.fighter.action !== "down") return 0;
+    const lyingFrames = Math.ceil(this.fighter.downFramesTotal / 2);
+    const risingFrames = this.fighter.downFramesTotal - lyingFrames;
+    if (this.fighter.actionFrame < lyingFrames || risingFrames === 0) {
+      return (Math.PI / 2) * this.fighter.downFacing;
+    }
+    const risingProgress = Math.min(
+      1,
+      (this.fighter.actionFrame - lyingFrames + 1) / risingFrames,
+    );
+    return (Math.PI / 2) * this.fighter.downFacing * (1 - risingProgress);
   }
 
   /** 解析済みの色替え・白枠マスクを、現在のスプライトへ同期する。 */
@@ -496,6 +531,12 @@ export class FighterView extends Container {
         ? fallbackPose
         : poses[this.spritePoseFrameIndex(definition)];
     const mirror = this.fighter.facing;
+    const downFallbackRotation =
+      this.fighter.action === "down" &&
+      !frameAsset &&
+      !(definition.animations.down?.length ?? 0)
+        ? this.downRotation()
+        : 0;
     const scale = definition.scale * (pose.scale ?? 1);
 
     // 連番PNGは画像自体に各フレームのポーズを含むため、JSONの位置・回転・拡縮補正は重ねない。
@@ -505,13 +546,14 @@ export class FighterView extends Container {
     // 元PNG・色オーバーレイ・白枠を完全に同じ姿勢で動かし、ずれを防ぐ。
     if (this.animatedSprite) {
       this.animatedSprite.position.set((pose.x ?? 0) * mirror, pose.y ?? 0);
-      this.animatedSprite.rotation = (pose.rotation ?? 0) * mirror;
+      this.animatedSprite.rotation =
+        (pose.rotation ?? 0) * mirror + downFallbackRotation;
       this.animatedSprite.scale.set(scale * mirror, scale);
     }
     for (const sprite of [this.spriteColorOverlay, this.spriteWhiteOutline]) {
       if (!sprite) continue;
       sprite.position.set((pose.x ?? 0) * mirror, pose.y ?? 0);
-      sprite.rotation = (pose.rotation ?? 0) * mirror;
+      sprite.rotation = (pose.rotation ?? 0) * mirror + downFallbackRotation;
       sprite.scale.set(
         scale * mirror * this.spriteColorLayerScale,
         scale * this.spriteColorLayerScale,
@@ -588,6 +630,12 @@ export class FighterView extends Container {
       .fill({
         color: 0xf7fbff,
       });
+    // 骨格JSON側にdownがない場合も、idleフォールバックを技方向へ横倒しにしてダウンを表現する。
+    this.body.rotation =
+      this.fighter.action === "down" &&
+      !(this.animation?.animations.down?.length ?? 0)
+        ? this.downRotation()
+        : 0;
   }
 
   /** 現在のゲームアクションに対応するBlenderボーンフレームを取得する。 */
@@ -633,6 +681,7 @@ export class FighterView extends Container {
   //====================================================
   private drawStickFigure(): void {
     const mirror = this.fighter.facing;
+    const down = this.fighter.action === "down";
 
     // 歩行時の足振り
     const walkSwing =
@@ -657,6 +706,19 @@ export class FighterView extends Container {
 
     const color = this.fighter.character.primaryColor;
     const accent = this.fighter.character.accentColor;
+
+    // ダウン前半は技方向へ横たわり、後半は設定フレーム数に合わせて立ち姿勢へ補間する。
+    const downPoseRotation = this.downRotation();
+
+    // 暗転演出中は棒人間にも専用状態が分かる脈動エフェクトを重ねる。
+    if (this.fighter.action === "cinematic") {
+      const pulse = 30 + (this.fighter.actionFrame % 12) * 2;
+      this.body.circle(0, -76, pulse).stroke({
+        color: accent,
+        width: 3,
+        alpha: 0.7,
+      });
+    }
 
     //====================================================
     // 胴体・腕・脚・頭を描画
@@ -747,6 +809,8 @@ export class FighterView extends Container {
     //====================================================
     if (this.fighter.action === "ko") {
       this.body.rotation = 1.15 * mirror;
+    } else if (down) {
+      this.body.rotation = downPoseRotation;
     } else {
       this.body.rotation = 0;
     }

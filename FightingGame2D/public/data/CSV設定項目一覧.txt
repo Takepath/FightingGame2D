@@ -69,7 +69,7 @@ charge_frames        溜め時間です。0は通常コマンドです。1以上
 -------------
 
 通常技、必殺技、投げ、飛び道具を定義します。1行が1つの技です。
-startup、active、recovery、invincible_frames、hitstun、guard_stun、projectile_lifetime は60 FPS基準のフレーム数です。
+startup、active、recovery、blackout_frames、invincible_frames、hitstun、down_frames、guard_stun、projectile_lifetime は60 FPS基準のフレーム数です。
 
 列名                 内容
 character_id         技を使用できるキャラクターのIDです。characters.csv の id を指定します。all を指定すると共通技になります。
@@ -78,11 +78,13 @@ button               発動ボタンです。light（弱）、heavy（強）、s
 startup              攻撃ボタンを押してから攻撃判定が出るまでのフレーム数です。
 active               攻撃判定が有効なフレーム数です。このフレーム数を超えて攻撃は当たりません。
 recovery             攻撃判定終了後の硬直フレーム数です。
+blackout_frames      技を開始した直後に暗転演出を継続するフレーム数です。0なら暗転しません。暗転中は背景が黒一色になり、全UIと飛び道具が非表示になります。攻撃側はcinematic状態を再生し、被攻撃側を含む他のキャラクターの入力・物理・落下・技進行は停止します。技本体のstartupは暗転終了後の0Fから開始します。
 invincible_frames    技の開始から無敵になるフレーム数です。0以上、startup+active+recovery以下の整数を指定します。無敵中は打撃・飛び道具・投げを受けません。
 damage               与えるダメージの実数値です。例: 500 は500ダメージです。0以上の整数を指定します。
 special_gauge_cost   必殺技ゲージの消費量です。0～100で指定します。発動時に不足している技は出せません。
 super_gauge_cost     超必殺ゲージの消費量です。0～300で指定します。発動時に不足している技は出せません。
-super_gauge_gain     超必殺ゲージの増加量です。0～300で指定します。相手にガードされずに命中した時だけ加算され、最大値は300です。
+super_combo_minimum_damage 超必殺ゲージを1以上消費する技だけに設定できる、コンボ補正後ダメージの実数値下限です。0は下限なしです。damage以下の整数を指定し、通常技は必ず0にします。
+super_gauge_gain     超必殺ゲージの増加量です。0～300で指定します。相手にガードされずに命中した時だけ攻撃側へ加算され、最大値は300です。ガードされた場合は攻撃側へ加算せず、防御側へ gameConfig.ts の guardedAttackSuperGaugeGainPercent（既定50%）ぶんだけ加算します。小数は切り捨てます。
 guard_bleak          ガード貫通かどうかです。true でガード不能、false で通常のガード判定を行います。投げにも true を指定します。
 starter_proration    始動補正です。コンボの初期倍率を増減する整数です。20なら120%、-10なら90%、0なら100%です。下限は10%です。
 range_x              近接攻撃判定の前方への届く距離です。単位はピクセルです。押し込み判定が発生する位置から測ります。投げでは投げ間合いになります。
@@ -97,8 +99,9 @@ knockback_y          ヒットした相手を上へ打ち上げる強さです�
 guard_knockback_x    ガードした相手を後方へ押し出す横方向の強さです。0以上の数値を指定します。0で相手は後退しません。
 guard_self_knockback_x ガードされた攻撃側を後方へ押し出す横方向の強さです。0以上の数値を指定します。0で自分は後退しません。
 hitstun              ヒットした相手が行動できなくなるフレーム数です。30を超える非ガードヒットでは5フレームの演出停止が入ります。
+down_frames          非ガード命中後、接地してからダウン状態を維持するフレーム数です。0ならダウンしません。空中では技方向へ吹き飛び、接地後の前半は横たわり、後半は立ち上がります。ダウン中は完全無敵で、guard_bleak=trueを含む全攻撃を受けず、入力・技・キャンセル・ガードを受け付けません。
 guard_stun           ガードした相手が行動できなくなるフレーム数です。0以上の整数を指定します。0ならガード硬直なしです。
-animation            技中に再生するアニメーション名です。idle、walk、jump、light、heavy、special、hit、block、crouchBlock、ko を指定します。
+animation            技中に再生するアニメーション名です。idle、walk、jump、light、heavy、special、hit、block、crouchBlock、cinematic、down、ko を指定します。cinematicはblackout_framesが1以上の技で、暗転中の攻撃側に使われます。downはダウン中の被撃側に使われます。
 attack_type          攻撃の種類です。melee は近接攻撃、projectile は飛び道具です。
 projectile_speed     attack_type=projectile の飛行速度です。単位はピクセル/秒です。0なら出現位置に留まる単発攻撃にできます。meleeでは0にします。
 projectile_lifetime  attack_type=projectile の存続時間です。単位はフレームです。meleeでは0にします。
@@ -109,13 +112,14 @@ command_id           必殺技コマンドです。commands.csv の command_id �
 cancel_into          この技からキャンセルして出せる攻撃種別です。light、heavy、special、throw を | 区切りで指定します。空欄はキャンセル不可です。
 
 記入例（波動拳）
-character_id,move_id,button,startup,active,recovery,invincible_frames,damage,special_gauge_cost,super_gauge_cost,super_gauge_gain,guard_bleak,starter_proration,range_x,range_y,self_move_x,self_move_y,self_move_speed,self_move_easing,knockback_x,knockback_y,guard_knockback_x,guard_self_knockback_x,hitstun,guard_stun,animation,attack_type,projectile_speed,projectile_lifetime,use_state,attack_level,projectile_id,command_id,cancel_into
-sample,hadoken,special,13,7,25,0,500,10,15,0,false,0,0,0,0,0,0,linear,300,0,100,80,15,8,special,projectile,720,110,ground,mid,hadoken_blue,hadoken,
+character_id,move_id,button,startup,active,recovery,blackout_frames,invincible_frames,damage,special_gauge_cost,super_gauge_cost,super_combo_minimum_damage,super_gauge_gain,guard_bleak,starter_proration,range_x,range_y,self_move_x,self_move_y,self_move_speed,self_move_easing,knockback_x,knockback_y,guard_knockback_x,guard_self_knockback_x,hitstun,down_frames,guard_stun,animation,attack_type,projectile_speed,projectile_lifetime,use_state,attack_level,projectile_id,command_id,cancel_into
+sample,hadoken,special,13,7,25,0,0,500,10,15,300,0,false,0,0,0,0,0,0,linear,300,0,100,80,15,0,8,special,projectile,720,110,ground,mid,hadoken_blue,hadoken,
 
 設定上の注意
 - command_id を持つ必殺技をキャンセルで出す場合も、対応する方向コマンドと攻撃ボタン入力が必要です。
 - 投げは密着時に使用します。相手も発生10フレーム中に投げ入力をすると投げ抜けになります。
 - コンボ中は、1・2ヒット目は100%、3ヒット目は80%、以降は70%から減衰し、最低10%の補正でダメージが計算されます。
+- super_combo_minimum_damage が0より大きい超必殺技は、上記補正で計算したダメージが設定値を下回っても、その設定値まで固定されます。
 
 
 4. projectiles.csv

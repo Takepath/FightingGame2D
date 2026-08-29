@@ -100,6 +100,8 @@ export interface FightingGameConfig {
       readonly specialRecoveryFrames: number;
       /** 前歩きを継続した時、超必殺ゲージを1加算するまでの固定フレーム数。 */
       readonly superGaugeForwardWalkGainIntervalFrames: number;
+      /** 攻撃をガードした側へ、攻撃側のsuper_gauge_gainから加算する割合（%）。 */
+      readonly guardedAttackSuperGaugeGainPercent: number;
     };
     readonly rounds: {
       readonly winsRequired: number;
@@ -114,10 +116,18 @@ export interface FightingGameConfig {
       readonly projectileSpawnOffsetY: number;
       readonly throwTechKnockbackDistance: number;
       readonly throwTechKnockbackSpeed: number;
+      /** 投げ抜け後、両者が次の行動を開始できない共通硬直フレーム数。 */
+      readonly throwTechRecoveryFrames: number;
       readonly backThrowHeavyRangeMargin: number;
       readonly backThrowDamagePercent: number;
       readonly hitStopHitstunThreshold: number;
       readonly hitStopFrames: number;
+      /** 相手の技の後隙へ命中したPUNISH時に、両者を停止するフレーム数。 */
+      readonly punishStopFrames: number;
+      /** PUNISH時にコンボ補正後の最終ダメージへ掛ける倍率（百分率）。 */
+      readonly punishDamagePercent: number;
+      /** PUNISHで中断した相手の後隙を、被弾硬直として補うフレーム数。 */
+      readonly punishRecoveryExtensionFrames: number;
       readonly lightCancelLimit: number;
       readonly heavyCancelLimit: number;
       readonly comboProration: {
@@ -136,6 +146,25 @@ export interface FightingGameConfig {
     readonly trainingInputHistoryLimit: number;
     readonly trainingInputElapsedFramesLimit: number;
     readonly superGaugeBarWidth: number;
+    /** HUDで固定表示するP1・P2の体力バー色。 */
+    readonly healthBarColors: readonly [number, number];
+    /** HUDとトレーニング判定表示で使う、ゲーム内容に影響しない配色。 */
+    readonly hudColors: {
+      readonly superGauge: {
+        readonly background: number;
+        readonly border: number;
+        readonly fill: number;
+        readonly text: string;
+      };
+      readonly trainingCollision: {
+        readonly actionableHurtbox: number;
+        readonly actionableHurtboxOutline: number;
+        readonly lockedHurtbox: number;
+        readonly lockedHurtboxOutline: number;
+        readonly attackbox: number;
+        readonly attackboxOutline: number;
+      };
+    };
     /** 色替えマスクの長辺上限。原寸PNGを常駐させず、表示品質とメモリを調整する。 */
     readonly spriteColorMaskMaxDimension: number;
     readonly hitStopSoundPath: string;
@@ -323,6 +352,8 @@ export const FIGHTING_GAME_CONFIG: FightingGameConfig = {
       superMax: 300,
       specialRecoveryFrames: FIXED_FPS,
       superGaugeForwardWalkGainIntervalFrames: 5,
+      // ガード時は攻撃側が本来得るゲージ量の半分を防御側へ渡す。
+      guardedAttackSuperGaugeGainPercent: 50,
     },
     rounds: {
       winsRequired: 2,
@@ -337,10 +368,14 @@ export const FIGHTING_GAME_CONFIG: FightingGameConfig = {
       projectileSpawnOffsetY: 82,
       throwTechKnockbackDistance: 120,
       throwTechKnockbackSpeed: 780,
+      throwTechRecoveryFrames: 30,
       backThrowHeavyRangeMargin: 12,
       backThrowDamagePercent: 80,
       hitStopHitstunThreshold: 30,
       hitStopFrames: 5,
+      punishStopFrames: 10,
+      punishDamagePercent: 120,
+      punishRecoveryExtensionFrames: 4,
       lightCancelLimit: 2,
       heavyCancelLimit: 1,
       comboProration: {
@@ -358,6 +393,26 @@ export const FIGHTING_GAME_CONFIG: FightingGameConfig = {
     trainingInputHistoryLimit: 8,
     trainingInputElapsedFramesLimit: 99,
     superGaugeBarWidth: 190,
+    // HPバーは選択キャラクターやCSVを参照せず、P1を水色、P2をピンクの固定色で表示する。
+    healthBarColors: [0x4fd8ff, 0xff5d8f],
+    hudColors: {
+      // 超必殺ゲージは従来の赤系ではなく、金色に近いオレンジ寄りの黄色で統一する。
+      superGauge: {
+        background: 0x1c1304,
+        border: 0xffc250,
+        fill: 0xffaa24,
+        text: "#ffc45a",
+      },
+      trainingCollision: {
+        // 行動できる被弾判定は赤、硬直・技中・KOなど行動できない判定は黄色で区別する。
+        actionableHurtbox: 0xef4444,
+        actionableHurtboxOutline: 0xff7373,
+        lockedHurtbox: 0xfacc15,
+        lockedHurtboxOutline: 0xfef08a,
+        attackbox: 0x38bdf8,
+        attackboxOutline: 0x7dd3fc,
+      },
+    },
     spriteColorMaskMaxDimension: 768,
     hitStopSoundPath: "data/sounds/slap-1.mp3",
     fireworks: {
@@ -588,10 +643,13 @@ export function validateFightingGameConfig(config: FightingGameConfig): void {
     !Number.isInteger(
       config.match.gauges.superGaugeForwardWalkGainIntervalFrames,
     ) ||
-    config.match.gauges.superGaugeForwardWalkGainIntervalFrames < 1
+    config.match.gauges.superGaugeForwardWalkGainIntervalFrames < 1 ||
+    !Number.isInteger(config.match.gauges.guardedAttackSuperGaugeGainPercent) ||
+    config.match.gauges.guardedAttackSuperGaugeGainPercent < 0 ||
+    config.match.gauges.guardedAttackSuperGaugeGainPercent > 100
   ) {
     throw new Error(
-      "match.gauges の最大値・回復間隔・前歩き増加間隔が不正です",
+      "match.gauges の最大値・回復間隔・前歩き増加間隔・ガード時加算率が不正です",
     );
   }
   if (
@@ -661,6 +719,8 @@ export function validateFightingGameConfig(config: FightingGameConfig): void {
     config.match.combat.projectileHitboxRadius <= 0 ||
     config.match.combat.throwTechKnockbackDistance < 0 ||
     config.match.combat.throwTechKnockbackSpeed < 0 ||
+    !Number.isInteger(config.match.combat.throwTechRecoveryFrames) ||
+    config.match.combat.throwTechRecoveryFrames < 0 ||
     config.match.combat.backThrowHeavyRangeMargin < 0 ||
     config.match.combat.backThrowDamagePercent < 0 ||
     config.match.combat.backThrowDamagePercent > 100 ||
@@ -668,6 +728,12 @@ export function validateFightingGameConfig(config: FightingGameConfig): void {
     config.match.combat.hitStopHitstunThreshold < 0 ||
     !Number.isInteger(config.match.combat.hitStopFrames) ||
     config.match.combat.hitStopFrames < 0 ||
+    !Number.isInteger(config.match.combat.punishStopFrames) ||
+    config.match.combat.punishStopFrames < 0 ||
+    !Number.isInteger(config.match.combat.punishDamagePercent) ||
+    config.match.combat.punishDamagePercent < 0 ||
+    !Number.isInteger(config.match.combat.punishRecoveryExtensionFrames) ||
+    config.match.combat.punishRecoveryExtensionFrames < 0 ||
     !Number.isInteger(config.match.combat.lightCancelLimit) ||
     config.match.combat.lightCancelLimit < 0 ||
     !Number.isInteger(config.match.combat.heavyCancelLimit) ||

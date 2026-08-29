@@ -54,10 +54,12 @@ const MOVE_HEADERS = [
   "startup",
   "active",
   "recovery",
+  "blackout_frames",
   "invincible_frames",
   "damage",
   "special_gauge_cost",
   "super_gauge_cost",
+  "super_combo_minimum_damage",
   "super_gauge_gain",
   "guard_bleak",
   "starter_proration",
@@ -72,6 +74,7 @@ const MOVE_HEADERS = [
   "guard_knockback_x",
   "guard_self_knockback_x",
   "hitstun",
+  "down_frames",
   "guard_stun",
   "animation",
   "attack_type",
@@ -250,6 +253,8 @@ const FIGHTER_ACTIONS = [
   "hit",
   "block",
   "crouchBlock",
+  "cinematic",
+  "down",
   "ko",
 ] as const satisfies readonly FighterAction[];
 
@@ -517,6 +522,13 @@ function parseMoves(source: string): MoveDefinition[] {
       integer: true,
       min: 0,
     });
+    const blackoutFrames = dataNumber(
+      row,
+      "blackout_frames",
+      "moves.csv",
+      line,
+      { integer: true, min: 0 },
+    );
     const invincibleFrames = dataNumber(
       row,
       "invincible_frames",
@@ -585,6 +597,56 @@ function parseMoves(source: string): MoveDefinition[] {
       );
     }
 
+    const damage = dataNumber(row, "damage", "moves.csv", line, {
+      integer: true,
+      min: 0,
+    });
+    const specialGaugeCost = dataNumber(
+      row,
+      "special_gauge_cost",
+      "moves.csv",
+      line,
+      {
+        integer: true,
+        min: 0,
+        max: FIGHTING_GAME_CONFIG.match.gauges.specialMax,
+      },
+    );
+    const superGaugeCost = dataNumber(
+      row,
+      "super_gauge_cost",
+      "moves.csv",
+      line,
+      {
+        integer: true,
+        min: 0,
+        max: FIGHTING_GAME_CONFIG.match.gauges.superMax,
+      },
+    );
+    const superComboMinimumDamage = dataNumber(
+      row,
+      "super_combo_minimum_damage",
+      "moves.csv",
+      line,
+      { integer: true, min: 0 },
+    );
+    if (superGaugeCost === 0 && superComboMinimumDamage !== 0) {
+      dataError(
+        "moves.csv",
+        line,
+        "super_combo_minimum_damage",
+        "super_gauge_cost が1以上の技だけに指定できます",
+      );
+    }
+    if (superComboMinimumDamage > damage) {
+      dataError(
+        "moves.csv",
+        line,
+        "super_combo_minimum_damage",
+        "damage 以下にしてください",
+      );
+    }
+
     return {
       characterId,
       id: moveId,
@@ -592,27 +654,12 @@ function parseMoves(source: string): MoveDefinition[] {
       startup,
       active,
       recovery,
+      blackoutFrames,
       invincibleFrames,
-      damage: dataNumber(row, "damage", "moves.csv", line, {
-        integer: true,
-        min: 0,
-      }),
-      specialGaugeCost: dataNumber(
-        row,
-        "special_gauge_cost",
-        "moves.csv",
-        line,
-        {
-          integer: true,
-          min: 0,
-          max: FIGHTING_GAME_CONFIG.match.gauges.specialMax,
-        },
-      ),
-      superGaugeCost: dataNumber(row, "super_gauge_cost", "moves.csv", line, {
-        integer: true,
-        min: 0,
-        max: FIGHTING_GAME_CONFIG.match.gauges.superMax,
-      }),
+      damage,
+      specialGaugeCost,
+      superGaugeCost,
+      superComboMinimumDamage,
       superGaugeGain: dataNumber(row, "super_gauge_gain", "moves.csv", line, {
         integer: true,
         min: 0,
@@ -650,6 +697,10 @@ function parseMoves(source: string): MoveDefinition[] {
         { min: 0 },
       ),
       hitstun: dataNumber(row, "hitstun", "moves.csv", line, {
+        integer: true,
+        min: 0,
+      }),
+      downFrames: dataNumber(row, "down_frames", "moves.csv", line, {
         integer: true,
         min: 0,
       }),

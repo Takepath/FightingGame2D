@@ -31,7 +31,7 @@ if errorlevel 1 goto :createFailed
 
 :createStateFolders
 REM ゲームで対応している全状態のフォルダを作成する
-for %%S in (idle walk jump light heavy special hit block crouchBlock ko) do call :createStateFolder "%%S"
+for %%S in (idle walk jump light heavy special hit block crouchBlock cinematic down ko) do call :createStateFolder "%%S"
 if errorlevel 1 goto :createFailed
 
 echo.

@@ -68,6 +68,8 @@ git diff --check
 | `hit`         | 被弾                              |
 | `block`       | 立ちガード                        |
 | `crouchBlock` | しゃがみガード（省略時は`block`） |
+| `cinematic`   | 暗転演出中の攻撃側（省略時は`idle`） |
+| `down`        | ダウン中の被撃側（前半は横たわり、後半は起き上がり） |
 | `ko`          | KO                                |
 
 ### 3.2 推奨するファイル構成
@@ -241,8 +243,8 @@ PNGを表示する場合は`render_type=sprite`、`asset=data/projectiles/river_
 ここでは主要列だけを説明します。`invincible_frames`、ガード時硬直・ノックバック、ゲージ、キャンセルなどを含む完全な一覧は[CSV設定項目一覧](../public/data/CSV設定項目一覧.txt)を参照してください。
 
 ```csv
-character_id,move_id,button,startup,active,recovery,invincible_frames,damage,special_gauge_cost,super_gauge_cost,super_gauge_gain,guard_bleak,starter_proration,range_x,range_y,self_move_x,self_move_y,self_move_speed,self_move_easing,knockback_x,knockback_y,guard_knockback_x,guard_self_knockback_x,hitstun,guard_stun,animation,attack_type,projectile_speed,projectile_lifetime,use_state,attack_level,projectile_id,command_id,cancel_into
-river_guard,river_shot,special,10,2,28,0,1100,10,0,15,false,0,0,0,0,0,0,linear,390,220,130,0,27,14,special,projectile,700,105,ground,mid,river_shot,river_shot,
+character_id,move_id,button,startup,active,recovery,blackout_frames,invincible_frames,damage,special_gauge_cost,super_gauge_cost,super_combo_minimum_damage,super_gauge_gain,guard_bleak,starter_proration,range_x,range_y,self_move_x,self_move_y,self_move_speed,self_move_easing,knockback_x,knockback_y,guard_knockback_x,guard_self_knockback_x,hitstun,down_frames,guard_stun,animation,attack_type,projectile_speed,projectile_lifetime,use_state,attack_level,projectile_id,command_id,cancel_into
+river_guard,river_shot,special,10,2,28,0,0,1100,10,0,0,15,false,0,0,0,0,0,0,linear,390,220,130,0,27,0,14,special,projectile,700,105,ground,mid,river_shot,river_shot,
 ```
 
 `moves.csv` の主要列は次のとおりです。
@@ -253,6 +255,7 @@ river_guard,river_shot,special,10,2,28,0,1100,10,0,15,false,0,0,0,0,0,0,linear,3
 | `move_id`                                  | 技ID。キャラクター内で重複させません。                                                          |
 | `button`                                   | `light`、`heavy`、`special`、`throw`。                                                          |
 | `startup` / `active` / `recovery`          | 発生・持続・硬直。すべて60FPS固定フレームです。                                                 |
+| `blackout_frames`                           | 0以外で技開始時に暗転します。暗転中は攻撃側だけが`cinematic`状態を再生し、相手の物理・入力・落下を停止します。 |
 | `damage`                                   | ダメージ。`500` を指定すると500ダメージとなり、割合換算はしません。                             |
 | `special_gauge_cost`                       | 必殺技ゲージの消費量。0〜100の整数で、残量不足時は技を出せません。                              |
 | `super_gauge_cost`                         | 超必殺ゲージの消費量。0〜300の整数で、残量不足時は技を出せません。                              |
@@ -265,7 +268,8 @@ river_guard,river_shot,special,10,2,28,0,1100,10,0,15,false,0,0,0,0,0,0,linear,3
 | `self_move_easing`                         | `linear`（一定）・`accelerate`（加速）・`decelerate`（減速）・`arc`（山なり）の速度変化。       |
 | `knockback_x` / `knockback_y`              | 命中時の横・縦方向の吹き飛び。                                                                  |
 | `hitstun`                                  | 命中時の硬直フレーム。                                                                          |
-| `animation`                                | JSONのアクション名。`light`・`heavy`・`special`など。                                           |
+| `down_frames`                              | 非ガード命中後に接地してからダウンするフレーム数。前半は横たわり、後半は立ち上がります。ダウン中は完全無敵です。 |
+| `animation`                                | JSONのアクション名。`light`・`heavy`・`special`・`cinematic`など。                             |
 | `attack_type`                              | `melee` または `projectile`。                                                                   |
 | `projectile_speed` / `projectile_lifetime` | 飛び道具の速度・生存フレーム。近接技は `0`。                                                    |
 | `use_state`                                | `ground`、`air`、`any`。                                                                        |
@@ -350,4 +354,4 @@ BlenderのArmature Actionを骨格JSONとして出力する場合は、同梱の
 blender --background Fighter.blend --python tools/blender_export_fighting_animation.py -- --armature Armature --output public/data/animations/river_guard.json
 ```
 
-Blenderでは正面視点を `X=横、Z=縦` とし、Action名を `idle`、`walk`、`jump`、`light`、`heavy`、`special`、`hit`、`block`、`crouchBlock`、`ko` に合わせます。`crouchBlock`を省略した場合は`block`を再生します。Armature骨格JSONとPNGスプライトJSONは同じ `animation_asset` 列から読み込めます。PNGスプライトJSONを使う場合は、さらに `public/data/characters/<character-id>/<state>/` にPNG連番を置くと、その状態だけ連番再生が優先されます。
+Blenderでは正面視点を `X=横、Z=縦` とし、Action名を `idle`、`walk`、`jump`、`light`、`heavy`、`special`、`hit`、`block`、`crouchBlock`、`cinematic`、`down`、`ko` に合わせます。`cinematic` は `moves.csv` の `blackout_frames` が1以上の技で、暗転中の攻撃側に再生されます。`down` は `down_frames` が1以上の技で接地した被撃側に再生され、前半を横たわり、後半を起き上がり用のPNG・ポーズにします。`crouchBlock`を省略した場合は`block`を再生します。Armature骨格JSONとPNGスプライトJSONは同じ `animation_asset` 列から読み込めます。PNGスプライトJSONを使う場合は、さらに `public/data/characters/<character-id>/<state>/` にPNG連番を置くと、その状態だけ連番再生が優先されます。

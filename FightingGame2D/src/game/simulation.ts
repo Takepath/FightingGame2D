@@ -42,6 +42,8 @@ const THROW_TECH_KNOCKBACK_DISTANCE =
 const THROW_TECH_KNOCKBACK_SPEED =
   (MATCH_CONFIG.combat.throwTechKnockbackSpeed * POSITION_SCALE) /
   FIGHTING_GAME_CONFIG.engine.fixedFps;
+/** 投げ抜け後、両プレイヤーに同じタイミングで適用する操作不能フレーム数。 */
+const THROW_TECH_RECOVERY_FRAMES = MATCH_CONFIG.combat.throwTechRecoveryFrames;
 /** 後ろ投げ後、強攻撃の最大リーチに加えて確保する余白。 */
 const BACK_THROW_HEAVY_RANGE_MARGIN =
   MATCH_CONFIG.combat.backThrowHeavyRangeMargin * POSITION_SCALE;
@@ -83,11 +85,25 @@ const SPECIAL_GAUGE_RECOVERY_FRAMES = MATCH_CONFIG.gauges.specialRecoveryFrames;
 const SUPER_GAUGE_FORWARD_WALK_GAIN_INTERVAL_FRAMES =
   MATCH_CONFIG.gauges.superGaugeForwardWalkGainIntervalFrames;
 
+/** 攻撃をガードした側へ渡す、攻撃側のゲージ獲得量に対する割合。 */
+const GUARDED_ATTACK_SUPER_GAUGE_GAIN_PERCENT =
+  MATCH_CONFIG.gauges.guardedAttackSuperGaugeGainPercent;
+
 /** ヒットスタンがこの値を超えた実ヒットで、ヒットストップを開始する。 */
 const HIT_STOP_HITSTUN_THRESHOLD = MATCH_CONFIG.combat.hitStopHitstunThreshold;
 
 /** 強い攻撃が命中した後、ゲーム進行を静止する固定フレーム数。 */
 export const HIT_STOP_FRAMES = MATCH_CONFIG.combat.hitStopFrames;
+
+/** PUNISH成立時に、途中のアニメーション・物理を保ったまま両者を止めるフレーム数。 */
+const PUNISH_STOP_FRAMES = MATCH_CONFIG.combat.punishStopFrames;
+
+/** PUNISHのダメージへ、コンボ補正と最低保証を計算した後で掛ける倍率。 */
+const PUNISH_DAMAGE_PERCENT = MATCH_CONFIG.combat.punishDamagePercent;
+
+/** PUNISHで技を中断された側に加える、後隙相当の追加被弾硬直。 */
+const PUNISH_RECOVERY_EXTENSION_FRAMES =
+  MATCH_CONFIG.combat.punishRecoveryExtensionFrames;
 
 /** 1試合は最大3ラウンドで決着する。 */
 export const MAX_ROUNDS = MATCH_CONFIG.rounds.winsRequired * 2 - 1;
@@ -143,6 +159,8 @@ export interface CollisionDebugBox {
 export interface FighterCollisionDebug {
   /** characters.csv の被弾判定。 */
   readonly hurtbox: CollisionDebugBox;
+  /** 通常の移動・ジャンプ・技選択を受け付けられる状態か。 */
+  readonly actionable: boolean;
   /** 現在の有効フレーム中にだけ存在する、近接攻撃の判定。 */
   readonly attackbox: CollisionDebugBox | null;
 }
@@ -203,6 +221,16 @@ export interface FighterState {
   comboThrowCanceled: boolean;
   /** キャンセルされなかった時だけ適用する、保留中のノックバック。 */
   pendingKnockback: PendingKnockback | null;
+  /** ダウン技を受けてから接地するまで保持する、ダウン状態の総フレーム数。 */
+  pendingDownFrames: number;
+  /** 接地後に倒れる向きとして使う、ダウン技命中時の吹き飛び方向。 */
+  pendingDownFacing: -1 | 1;
+  /** 現在のダウン状態で残っている固定フレーム数。 */
+  downFramesRemaining: number;
+  /** 横たわり・起き上がりの表示比率に使う、ダウン状態の総フレーム数。 */
+  downFramesTotal: number;
+  /** ダウン中の横たわる向き。被弾後に相手を飛び越えても変えない。 */
+  downFacing: -1 | 1;
   stun: number;
   /** ガード成功後に操作を抑止してガード姿勢を維持するフレーム数。 */
   guardStun: number;
@@ -239,6 +267,8 @@ export interface ProjectileState {
   guardPiercing: boolean;
   /** 飛び道具を出した技のコンボ始動補正率。 */
   starterProration: number;
+  /** 超必殺ゲージ消費技の、コンボ補正後ダメージ下限。 */
+  superComboMinimumDamage: number;
   /** 飛び道具にも適用する上・中・下属性。 */
   attackLevel: AttackLevel;
   knockbackX: number;
@@ -248,6 +278,8 @@ export interface ProjectileState {
   /** ガードされた攻撃側へ与える横方向の後退速度。 */
   guardSelfKnockbackX: number;
   hitstun: number;
+  /** 命中後に接地してから開始する、ダウン状態の固定フレーム数。 */
+  downFrames: number;
   /** ガード成功側の操作を抑止する固定フレーム数。 */
   guardStun: number;
   /** この飛び道具を出した技が、非ガード命中時に加算する超必殺ゲージ量。 */
@@ -274,6 +306,12 @@ export class MatchSimulation implements DeterministicSimulation {
   public trainingResetFrames = 0;
   /** 強い攻撃の命中後に残る、入力・物理・時計を静止するフレーム数。 */
   public hitStopFrames = 0;
+  /** PUNISH表示と共通停止を維持する残り固定フレーム数。 */
+  public punishFrames = 0;
+  /** 技開始時の暗転演出の残り固定フレーム数。0なら通常進行。 */
+  private blackoutFrames = 0;
+  /** 暗転演出中にcinematic状態を再生する攻撃側。 */
+  private blackoutAttacker: PlayerId | null = null;
   public readonly projectiles: ProjectileState[] = [];
   /** キャラクターごとに利用可能な技をCSV順で保持する索引。 */
   private readonly movesByCharacter = new Map<
@@ -347,9 +385,16 @@ export class MatchSimulation implements DeterministicSimulation {
     // CPU・通信を含むすべての入力を同じ規則で正規化し、コマンド履歴にも相反方向を残さない。
     const playerOneInput = normalizeFrameInput(inputs[0]);
     const playerTwoInput = normalizeFrameInput(inputs[1]);
+    if (this.blackoutFrames > 0) {
+      // 暗転中は攻撃側のcinematicアニメーションだけを進め、被攻撃側・物理・時計を完全に停止する。
+      this.advanceBlackout(playerOneInput, playerTwoInput);
+      return;
+    }
     if (this.hitStopFrames > 0) {
       // ヒットストップ中は全ファイター・飛び道具・時計を進めず、画面を固定する。
       this.hitStopFrames -= 1;
+      // PUNISHの表示時間も同じ停止フレームで減らし、途中状態のまま再開する。
+      if (this.punishFrames > 0) this.punishFrames -= 1;
       return;
     }
     if (this.training && this.trainingResetFrames > 0) {
@@ -389,7 +434,18 @@ export class MatchSimulation implements DeterministicSimulation {
 
     this.updateFacing();
     this.updateFighter(this.fighters[0], playerOneInput);
+    if (this.blackoutFrames > 0) {
+      // 演出を開始した固定フレームも、相手の技・物理・攻撃判定を進めずに終了する。
+      // この時点で押されているボタンは、暗転解除後の新規入力として扱わない。
+      this.consumeBlackoutStartInputs(playerOneInput, playerTwoInput);
+      return;
+    }
     this.updateFighter(this.fighters[1], playerTwoInput);
+    if (this.blackoutFrames > 0) {
+      // P2側が演出技を出した場合も、同じフレームの攻撃解決・飛び道具更新を停止する。
+      this.consumeBlackoutStartInputs(playerOneInput, playerTwoInput);
+      return;
+    }
     this.resolveAttack(this.fighters[0], this.fighters[1], playerTwoInput);
     // トレーニングKO直後は、同フレームの残り攻撃を解決せず再開待機へ移る。
     if (this.training && this.trainingResetFrames > 0) return;
@@ -401,6 +457,72 @@ export class MatchSimulation implements DeterministicSimulation {
     this.updateFacing();
     this.updateSuperGaugeFromForwardWalk(this.fighters[0], playerOneInput);
     this.updateSuperGaugeFromForwardWalk(this.fighters[1], playerTwoInput);
+  }
+
+  /** 描画側がUIを隠して黒背景へ切り替えるべき暗転演出中かを返す。 */
+  public get isBlackoutActive(): boolean {
+    return this.blackoutFrames > 0;
+  }
+
+  /** 描画側がPUNISH演出を中央に表示すべき共通停止中かを返す。 */
+  public get isPunishActive(): boolean {
+    return this.punishFrames > 0;
+  }
+
+  /** 暗転を開始したフレームに押されていたボタンを、新規入力として残さない。 */
+  private consumeBlackoutStartInputs(
+    playerOneInput: FrameInput,
+    playerTwoInput: FrameInput,
+  ): void {
+    this.fighters[0].previousButtons = playerOneInput.buttons;
+    this.fighters[1].previousButtons = playerTwoInput.buttons;
+  }
+
+  /**
+   * 暗転の1固定フレームを進める。
+   * 攻撃側は専用アニメーションだけを進め、被攻撃側は入力・硬直・速度・落下をすべて停止する。
+   */
+  private advanceBlackout(
+    playerOneInput: FrameInput,
+    playerTwoInput: FrameInput,
+  ): void {
+    const attackerPlayer = this.blackoutAttacker;
+    if (attackerPlayer === null) {
+      // 予期しない状態でも、暗転だけが残って試合が停止し続けないよう安全に解除する。
+      this.blackoutFrames = 0;
+      return;
+    }
+
+    const attacker = this.fighters[attackerPlayer];
+    const defender = this.fighters[attackerPlayer === 0 ? 1 : 0];
+    const attackerInput =
+      attackerPlayer === 0 ? playerOneInput : playerTwoInput;
+    const defenderInput =
+      attackerPlayer === 0 ? playerTwoInput : playerOneInput;
+
+    // 位置・速度・技本体のフレームは進めず、cinematic状態のアニメーションだけを再生する。
+    attacker.action = "cinematic";
+    attacker.actionFrame += 1;
+    attacker.previousButtons = attackerInput.buttons;
+    // 入力を新規押下として持ち越さず、演出終了後に改めて入力された行動から開始する。
+    defender.previousButtons = defenderInput.buttons;
+
+    this.blackoutFrames -= 1;
+    if (this.blackoutFrames > 0) return;
+
+    this.blackoutAttacker = null;
+    const move = this.moveFor(attacker, attacker.activeMoveId);
+    if (!move) {
+      // 演出中に試合初期化された場合でも、攻撃側を操作可能な待機状態へ復帰させる。
+      attacker.action = "idle";
+      attacker.actionFrame = 0;
+      attacker.activeMoveId = null;
+      return;
+    }
+
+    // 技本体のstartupは、暗転が終わった時点からフレーム0で開始する。
+    attacker.action = move.animation;
+    attacker.actionFrame = 0;
   }
 
   public resetMatch(): void {
@@ -415,6 +537,9 @@ export class MatchSimulation implements DeterministicSimulation {
     this.roundTimeFrames = ROUND_TIME_SECONDS * FRAMES_PER_SECOND;
     this.trainingResetFrames = 0;
     this.hitStopFrames = 0;
+    this.punishFrames = 0;
+    this.blackoutFrames = 0;
+    this.blackoutAttacker = null;
     this.projectiles.length = 0;
     this.resetFighters();
   }
@@ -477,6 +602,11 @@ export class MatchSimulation implements DeterministicSimulation {
       comboSpecialCanceled: false,
       comboThrowCanceled: false,
       pendingKnockback: null,
+      pendingDownFrames: 0,
+      pendingDownFacing: player === 0 ? 1 : -1,
+      downFramesRemaining: 0,
+      downFramesTotal: 0,
+      downFacing: player === 0 ? 1 : -1,
       stun: 0,
       guardStun: 0,
       guardStance: null,
@@ -490,6 +620,7 @@ export class MatchSimulation implements DeterministicSimulation {
   private createCollisionDebug(fighter: FighterState): FighterCollisionDebug {
     const centerX = fighter.x / POSITION_SCALE;
     const groundY = fighter.y / POSITION_SCALE;
+    const actionable = this.isFighterActionable(fighter);
     const hurtbox = {
       x: centerX - fighter.character.hurtboxWidth / 2,
       y: groundY - fighter.character.hurtboxTop,
@@ -502,7 +633,7 @@ export class MatchSimulation implements DeterministicSimulation {
       move.attackType !== "melee" ||
       !this.isMoveInActiveFrame(fighter, move)
     ) {
-      return { hurtbox, attackbox: null };
+      return { hurtbox, actionable, attackbox: null };
     }
 
     // 近接技と投げは、自分の被弾判定前端から押し込み余白とrange_x/range_yへ伸びる箱として表示する。
@@ -516,6 +647,7 @@ export class MatchSimulation implements DeterministicSimulation {
     );
     return {
       hurtbox,
+      actionable,
       attackbox: {
         x: fighter.facing === 1 ? pushboxFront : pushboxFront - attackWidth,
         y: groundY - ATTACK_CENTER_FROM_GROUND / POSITION_SCALE - move.rangeY,
@@ -525,17 +657,38 @@ export class MatchSimulation implements DeterministicSimulation {
     };
   }
 
+  /**
+   * トレーニングの判定表示用に、通常行動を開始できる状態かを返す。
+   * 技の全体動作・被弾硬直・ガード硬直・KO中はキャンセル以外の行動を開始できないためfalseにする。
+   */
+  private isFighterActionable(fighter: FighterState): boolean {
+    return (
+      fighter.action !== "ko" &&
+      fighter.action !== "down" &&
+      fighter.activeMoveId === null &&
+      fighter.guardStun === 0 &&
+      !this.isComboLocked(fighter)
+    );
+  }
+
   /** 両プレイヤーを相手側へ自動で向け、飛び越え後も攻撃・コマンド方向を一致させる。 */
   private updateFacing(): void {
     const [playerOne, playerTwo] = this.fighters;
     if (playerOne.x === playerTwo.x) return;
 
-    playerOne.facing = playerOne.x < playerTwo.x ? 1 : -1;
-    playerTwo.facing = playerOne.facing === 1 ? -1 : 1;
+    // ダウン中は被弾時の向きを固定し、横たわる・起き上がる演出の途中で左右反転しないようにする。
+    if (playerOne.action !== "down") {
+      playerOne.facing = playerOne.x < playerTwo.x ? 1 : -1;
+    }
+    if (playerTwo.action !== "down") {
+      playerTwo.facing = playerTwo.x < playerOne.x ? 1 : -1;
+    }
   }
 
   /** 次の固定フレームで指定ファイターへ命中する攻撃があるかを予測する。 */
   public willAttackHitNextFrame(defender: FighterState): boolean {
+    // 暗転演出中は技のstartup・飛び道具移動を進めないため、CPUガードも開始しない。
+    if (this.blackoutFrames > 0) return false;
     const attacker = this.fighters[defender.player === 0 ? 1 : 0];
     if (this.willMeleeHitNextFrame(attacker, defender)) return true;
 
@@ -592,6 +745,25 @@ export class MatchSimulation implements DeterministicSimulation {
   private updateFighter(fighter: FighterState, input: FrameInput): void {
     /** 1人分の入力を移動・ジャンプ・通常技・硬直へ反映する。 */
     if (fighter.action === "ko") {
+      fighter.previousButtons = input.buttons;
+      return;
+    }
+    if (fighter.action === "down") {
+      if (fighter.downFramesRemaining > 0) {
+        // ダウン中は先行入力・コマンド履歴を残さず、技・キャンセル・ガードを一切受け付けない。
+        this.updateDownFighter(fighter, input);
+        return;
+      }
+      // 最終ダウンフレームを表示し終えた次の固定フレームから、通常の立ち状態へ復帰する。
+      this.finishDown(fighter);
+    }
+    if (
+      fighter.pendingDownFrames > 0 &&
+      fighter.y === GROUND_Y * POSITION_SCALE &&
+      fighter.velocityY === 0
+    ) {
+      // ダウン技は空中では通常どおり吹き飛び、接地した時点でだけ完全無敵のダウン状態へ入る。
+      this.startDown(fighter);
       fighter.previousButtons = input.buttons;
       return;
     }
@@ -732,6 +904,55 @@ export class MatchSimulation implements DeterministicSimulation {
     fighter.actionFrame += 1;
     this.applyPhysics(fighter);
     fighter.previousButtons = input.buttons;
+  }
+
+  /** 接地済みのダウンを1固定フレーム進め、全入力を破棄する。 */
+  private updateDownFighter(fighter: FighterState, input: FrameInput): void {
+    fighter.bufferedActionHistory.length = 0;
+    fighter.inputHistory.length = 0;
+    // 横たわっている間は押し込み・残存ノックバックでも移動しないよう、速度を完全に止める。
+    fighter.velocityX = 0;
+    fighter.velocityY = 0;
+    fighter.actionFrame += 1;
+    fighter.downFramesRemaining -= 1;
+    fighter.previousButtons = input.buttons;
+  }
+
+  /** 接地直後に、設定された時間だけ完全無敵となるダウン状態を開始する。 */
+  private startDown(fighter: FighterState): void {
+    const totalFrames = fighter.pendingDownFrames;
+    fighter.pendingDownFrames = 0;
+    fighter.downFramesTotal = totalFrames;
+    // 開始した現在フレームを1F目として表示するため、残りは1少なく保持する。
+    fighter.downFramesRemaining = Math.max(0, totalFrames - 1);
+    fighter.downFacing = fighter.pendingDownFacing;
+    fighter.activeMoveId = null;
+    fighter.activeFramesResolved = 0;
+    fighter.attackConnected = false;
+    fighter.projectileSpawned = false;
+    fighter.throwDirection = 0;
+    fighter.comboCancelable = false;
+    fighter.pendingKnockback = null;
+    fighter.stun = 0;
+    fighter.guardStun = 0;
+    fighter.guardStance = null;
+    fighter.comboHitCount = 0;
+    fighter.comboStarterPlayer = null;
+    fighter.comboStarterProration = 0;
+    fighter.bufferedActionHistory.length = 0;
+    fighter.inputHistory.length = 0;
+    fighter.velocityX = 0;
+    fighter.velocityY = 0;
+    fighter.action = "down";
+    fighter.actionFrame = 0;
+  }
+
+  /** ダウン最終フレーム後に、次の入力を受け付ける立ち状態へ戻す。 */
+  private finishDown(fighter: FighterState): void {
+    fighter.downFramesRemaining = 0;
+    fighter.downFramesTotal = 0;
+    fighter.action = "idle";
+    fighter.actionFrame = 0;
   }
 
   /** ヒットスタン中、または空中で被弾姿勢の間をコンボ確定状態として扱う。 */
@@ -911,8 +1132,13 @@ export class MatchSimulation implements DeterministicSimulation {
         ? this.throwDirectionFor(fighter, inputButtons)
         : 0;
     fighter.comboCancelable = false;
-    // startup=0の技だけは、開始フレームを自キャラ移動の初回フレームとして扱う。
-    this.applySelfMoveAnimation(fighter, move);
+    if (move.blackoutFrames > 0) {
+      // 暗転中は専用状態でのみ表示し、技本体のstartup・自キャラ移動は演出終了後から開始する。
+      this.startBlackout(fighter, move.blackoutFrames);
+    } else {
+      // startup=0の技だけは、開始フレームを自キャラ移動の初回フレームとして扱う。
+      this.applySelfMoveAnimation(fighter, move);
+    }
 
     if (!isComboCancel) {
       // 通常始動では、前のコンボのキャンセル回数を初期化する。
@@ -936,6 +1162,17 @@ export class MatchSimulation implements DeterministicSimulation {
     } else if (move.button === InputButton.Throw) {
       fighter.comboThrowCanceled = true;
     }
+  }
+
+  /** 技開始時に、攻撃側だけをcinematic状態へ移して暗転演出を開始する。 */
+  private startBlackout(attacker: FighterState, frames: number): void {
+    // 通常の入力経路では重ならないが、将来の演出追加時にも先に始まった暗転を壊さない。
+    if (this.blackoutFrames > 0) return;
+
+    this.blackoutFrames = frames;
+    this.blackoutAttacker = attacker.player;
+    attacker.action = "cinematic";
+    attacker.actionFrame = 0;
   }
 
   /**
@@ -1191,6 +1428,22 @@ export class MatchSimulation implements DeterministicSimulation {
     return move.startup + move.active + move.recovery;
   }
 
+  /** 実行中の技が持続を終え、CSVのrecoveryで指定した後隙にいるかを判定する。 */
+  private isMoveInRecovery(fighter: FighterState): boolean {
+    const move = this.moveFor(fighter, fighter.activeMoveId);
+    return (
+      move !== undefined &&
+      fighter.actionFrame >= move.startup + move.active &&
+      fighter.actionFrame < this.moveLength(move)
+    );
+  }
+
+  /** PUNISHの共通停止を開始する。状態は進めないため解除後はそのまま滑らかに続行する。 */
+  private startPunishPresentation(): void {
+    this.punishFrames = Math.max(this.punishFrames, PUNISH_STOP_FRAMES);
+    this.hitStopFrames = Math.max(this.hitStopFrames, PUNISH_STOP_FRAMES);
+  }
+
   private resolveAttack(
     attacker: FighterState,
     defender: FighterState,
@@ -1364,10 +1617,16 @@ export class MatchSimulation implements DeterministicSimulation {
     fighter.throwDirection = 0;
     fighter.comboCancelable = false;
     fighter.pendingKnockback = null;
-    fighter.stun = 0;
+    // 投げ抜けの硬直は必ず同じ値を設定し、P1/P2で次の行動開始フレームを一致させる。
+    fighter.stun = THROW_TECH_RECOVERY_FRAMES;
     fighter.guardStun = 0;
     fighter.guardStance = null;
-    fighter.action = "idle";
+    fighter.comboHitCount = 0;
+    fighter.comboStarterPlayer = null;
+    fighter.comboStarterProration = 0;
+    fighter.bufferedActionHistory.length = 0;
+    fighter.inputHistory.length = 0;
+    fighter.action = THROW_TECH_RECOVERY_FRAMES > 0 ? "hit" : "idle";
     fighter.actionFrame = 0;
   }
 
@@ -1466,7 +1725,9 @@ export class MatchSimulation implements DeterministicSimulation {
       guardKnockbackX: move.guardKnockbackX,
       guardSelfKnockbackX: move.guardSelfKnockbackX,
       hitstun: move.hitstun,
+      downFrames: move.downFrames,
       guardStun: move.guardStun,
+      superComboMinimumDamage: move.superComboMinimumDamage,
       superGaugeGain: move.superGaugeGain,
     });
   }
@@ -1534,12 +1795,14 @@ export class MatchSimulation implements DeterministicSimulation {
       | "damage"
       | "guardPiercing"
       | "starterProration"
+      | "superComboMinimumDamage"
       | "attackLevel"
       | "knockbackX"
       | "knockbackY"
       | "guardKnockbackX"
       | "guardSelfKnockbackX"
       | "hitstun"
+      | "downFrames"
       | "guardStun"
       | "superGaugeGain"
     >,
@@ -1561,12 +1824,19 @@ export class MatchSimulation implements DeterministicSimulation {
       !attack.guardPiercing &&
       guardStance !== null &&
       this.canGuardAttack(guardStance, attack.attackLevel);
+    // 持続終了後から技終了前までに実ヒットした場合だけ、後隙を取ったPUNISHとする。
+    // ガード成立時は相手の隙へ触れていてもPUNISHにはしない。
+    const punish = !defending && this.isMoveInRecovery(defender);
     if (!defending) {
       // 技ごとの超必殺ゲージは、ガードされずに実ヒットした場合だけ加算する。
       this.gainSuperGauge(attacker, attack.superGaugeGain);
       if (attack.hitstun > HIT_STOP_HITSTUN_THRESHOLD) {
         // 同一フレームに複数の強い攻撃が重なっても、静止時間は常に5Fに固定する。
         this.hitStopFrames = Math.max(this.hitStopFrames, HIT_STOP_FRAMES);
+      }
+      if (punish) {
+        // 通常のヒットストップより長い10Fの停止を優先し、表示も同じ時間だけ維持する。
+        this.startPunishPresentation();
       }
       const hitCount = comboContinuation ? defender.comboHitCount + 1 : 1;
       const starterProration = comboContinuation
@@ -1587,17 +1857,33 @@ export class MatchSimulation implements DeterministicSimulation {
       // コンボ中に押した入力は、コンボ終了後の技発動にも持ち越さない。
       defender.bufferedActionHistory.length = 0;
       defender.inputHistory.length = 0;
+    } else {
+      // ガード時は攻撃側が得るはずだった量の一部を、防御側の超必殺ゲージへ加算する。
+      // 超必殺ゲージは整数管理のため、奇数の半分などの小数は切り捨てる。
+      this.gainSuperGauge(
+        defender,
+        Math.trunc(
+          (attack.superGaugeGain * GUARDED_ATTACK_SUPER_GAUGE_GAIN_PERCENT) /
+            100,
+        ),
+      );
     }
+    const comboDamage = Math.trunc(
+      (attack.damage *
+        this.comboDamagePercent(
+          defender.comboHitCount,
+          defender.comboStarterProration,
+        )) /
+        100,
+    );
+    // 超必殺ゲージを消費する技だけは、CSV指定の実数値をコンボ補正後ダメージの下限にする。
+    const finalDamage = Math.max(comboDamage, attack.superComboMinimumDamage);
+    // PUNISH倍率は始動補正・コンボ補正・超必殺の最低火力を確定した後にだけ掛ける。
     const damage = defending
       ? 0
-      : Math.trunc(
-          (attack.damage *
-            this.comboDamagePercent(
-              defender.comboHitCount,
-              defender.comboStarterProration,
-            )) /
-            100,
-        );
+      : punish
+        ? Math.trunc((finalDamage * PUNISH_DAMAGE_PERCENT) / 100)
+        : finalDamage;
     defender.health = Math.max(0, defender.health - damage);
     if (
       this.training &&
@@ -1620,7 +1906,11 @@ export class MatchSimulation implements DeterministicSimulation {
       ? 0
       : -Math.trunc((attack.knockbackY * POSITION_SCALE) / FRAMES_PER_SECOND);
     const shouldDeferKnockback =
-      deferKnockback && !defending && defender.health > 0;
+      deferKnockback &&
+      !defending &&
+      defender.health > 0 &&
+      // ダウン技は吹き飛びが接地判定の前提になるため、キャンセル待ちにして速度を止めない。
+      attack.downFrames === 0;
     if (shouldDeferKnockback) {
       // 弱・強のヒット時は、次のキャンセル入力までノックバックを保留する。
       defender.pendingKnockback = {
@@ -1636,8 +1926,17 @@ export class MatchSimulation implements DeterministicSimulation {
       defender.velocityX = velocityX;
       defender.velocityY = velocityY;
     }
-    defender.stun = defending ? 0 : attack.hitstun;
+    // PUNISHでは被弾で技が中断されるため、残り後隙4Fを被弾硬直へ加えて保証する。
+    defender.stun = defending
+      ? 0
+      : attack.hitstun + (punish ? PUNISH_RECOVERY_EXTENSION_FRAMES : 0);
     defender.guardStun = defending ? attack.guardStun : 0;
+    if (!defending && attack.downFrames > 0 && defender.health > 0) {
+      // 技方向はノックバック速度の符号を優先し、速度0の技だけ攻撃側の向きを使う。
+      defender.pendingDownFrames = attack.downFrames;
+      defender.pendingDownFacing =
+        velocityX === 0 ? attacker.facing : velocityX > 0 ? 1 : -1;
+    }
     if (defending) {
       // ガードされた攻撃側も、CSV指定量だけ後方へ反動させて間合いを調整する。
       attacker.velocityX =
@@ -1664,8 +1963,10 @@ export class MatchSimulation implements DeterministicSimulation {
     return true;
   }
 
-  /** 実行中の技が、moves.csvのinvincible_framesで指定した無敵時間中かを返す。 */
+  /** 実行中の技または接地後ダウンが、攻撃を一切受けない無敵時間中かを返す。 */
   private isMoveInvincible(fighter: FighterState): boolean {
+    // ダウン中はguard_bleak=trueの投げ・打撃・飛び道具を含む全攻撃を無効化する。
+    if (fighter.action === "down") return true;
     const move = this.moveFor(fighter, fighter.activeMoveId);
     return (
       move !== undefined &&
@@ -2021,6 +2322,7 @@ export class MatchSimulation implements DeterministicSimulation {
       defender.y === GROUND_Y * POSITION_SCALE && defender.velocityY === 0;
     if (
       !grounded ||
+      defender.action === "down" ||
       defender.stun > 0 ||
       defender.guardStun > 0 ||
       defender.activeMoveId !== null
@@ -2099,7 +2401,7 @@ export class MatchSimulation implements DeterministicSimulation {
     this.roundIntroFrames = ROUND_INTRO_FRAMES;
     this.roundTimeFrames = ROUND_TIME_SECONDS * FRAMES_PER_SECOND;
     this.projectiles.length = 0;
-    this.resetFighters();
+    this.resetFighters(true);
   }
 
   /** 時間切れ時の残体力比較を行い、同値ならP1を勝者にする。 */
@@ -2132,12 +2434,20 @@ export class MatchSimulation implements DeterministicSimulation {
   /** トレーニングのKO待機後、体力・位置・行動を初期状態へ戻す。 */
   private resetTrainingFighters(): void {
     this.projectiles.length = 0;
-    this.resetFighters();
+    this.resetFighters(true);
   }
 
-  private resetFighters(): void {
+  private resetFighters(preserveSuperGauge = false): void {
     /** 描画ビューの参照を保ったまま、2人分の戦闘状態を初期化する。 */
+    const superGauges: readonly [number, number] | null = preserveSuperGauge
+      ? [this.fighters[0].superGauge, this.fighters[1].superGauge]
+      : null;
     Object.assign(this.fighters[0], this.createFighter(0));
     Object.assign(this.fighters[1], this.createFighter(1));
+    if (superGauges) {
+      // 超必殺ゲージはラウンド間・トレーニングKO再開時に持ち越し、対戦開始時だけ0へ戻す。
+      this.fighters[0].superGauge = superGauges[0];
+      this.fighters[1].superGauge = superGauges[1];
+    }
   }
 }
