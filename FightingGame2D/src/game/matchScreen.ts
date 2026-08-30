@@ -308,6 +308,9 @@ export class MatchScreen extends Container {
   /** KO表示 */
   private readonly koText: Text;
 
+  /** PUNISH文字の背面に表示する、コミック調の青い爆発形状。 */
+  private readonly punishBurstArt = new Graphics();
+
   /** 相手の技の後隙を取った時だけ中央に表示するPUNISH演出。 */
   private readonly punishText: Text;
 
@@ -493,14 +496,16 @@ export class MatchScreen extends Container {
       text: "PUNISH!",
       style: {
         fontFamily: "Arial Black, Arial, sans-serif",
-        fontSize: 82,
+        fontSize: 78,
         fontWeight: "900",
-        fill: "#ef233c",
-        stroke: { color: "#000000", width: 10 },
+        fill: "#f4a0bd",
+        stroke: { color: "#000000", width: 9 },
         letterSpacing: 2,
       },
       anchor: 0.5,
     });
+    // 添付見本のように、文字は少し右上がりのコミック効果音風に傾ける。
+    this.punishText.rotation = -0.15;
     this.punishText.visible = false;
     this.comboText = this.createText("", 32, "#ffe58a");
     this.comboText.visible = false;
@@ -570,6 +575,7 @@ export class MatchScreen extends Container {
       this.info,
       this.roundText,
       this.koText,
+      this.punishBurstArt,
       this.punishText,
       this.comboText,
       this.superGaugeDigits[0],
@@ -583,6 +589,7 @@ export class MatchScreen extends Container {
     // 初回描画
     this.drawStage();
     this.drawBlackoutBackground();
+    this.drawPunishBurst();
     this.drawHud();
     this.refreshViews();
 
@@ -1551,6 +1558,51 @@ export class MatchScreen extends Container {
     this.blackoutArt.visible = false;
   }
 
+  /** 添付見本のような、不規則なトゲを持つ青いコミック調の爆発形状を描画する。 */
+  private drawPunishBurst(): void {
+    const centerX = STAGE_WIDTH / 2;
+    const centerY = STAGE_HEIGHT / 2;
+    // 長短の異なるトゲを交互に置き、機械的な正多角形に見えないようにする。
+    const points: readonly (readonly [number, number])[] = [
+      [-330, -66],
+      [-172, -105],
+      [-292, -235],
+      [-70, -137],
+      [-26, -325],
+      [20, -143],
+      [108, -270],
+      [96, -117],
+      [308, -222],
+      [158, -70],
+      [354, -4],
+      [156, 38],
+      [320, 252],
+      [70, 116],
+      [29, 296],
+      [-18, 124],
+      [-158, 260],
+      [-132, 89],
+      [-342, 218],
+      [-174, 34],
+    ];
+    const firstPoint = points[0];
+    if (!firstPoint) return;
+
+    this.punishBurstArt.clear();
+    this.punishBurstArt.moveTo(
+      centerX + firstPoint[0],
+      centerY + firstPoint[1],
+    );
+    for (const [x, y] of points.slice(1)) {
+      this.punishBurstArt.lineTo(centerX + x, centerY + y);
+    }
+    this.punishBurstArt
+      .closePath()
+      .fill({ color: 0x17459e, alpha: 0.98 })
+      .stroke({ color: 0x02040a, width: 6, alpha: 1 });
+    this.punishBurstArt.visible = false;
+  }
+
   private drawHud(): void {
     const [left, right] = this.simulation.fighters;
     if (
@@ -1837,10 +1889,12 @@ export class MatchScreen extends Container {
       this.training && this.trainingInputHistoryEnabled;
   }
 
-  /** PUNISH成立中だけ、太い黒縁付きの赤文字を画面中央へ重ねる。 */
+  /** PUNISH成立中だけ、青い爆発形状と太い黒縁付き文字を画面中央へ重ねる。 */
   private updatePunishPresentation(): void {
-    this.punishText.visible =
+    const visible =
       !this.simulation.isBlackoutActive && this.simulation.isPunishActive;
+    this.punishBurstArt.visible = visible;
+    this.punishText.visible = visible;
   }
 
   /** 2段目以降の連続ヒット数を、攻撃側HPバーの中央寄り下へ表示する。 */
