@@ -5,6 +5,7 @@ import type { GameData } from "./types";
 function deterministicData(
   data: GameData,
   config: FightingGameConfig,
+  stageIds: readonly string[],
 ): unknown {
   return {
     protocol: 1,
@@ -25,6 +26,8 @@ function deterministicData(
       id: projectile.id,
       hitboxRadius: projectile.hitboxRadius,
     })),
+    // オンラインではP1のステージを両者へ反映するため、背景ファイル一覧の不一致も開始前に検出する。
+    stageIds,
   };
 }
 
@@ -35,9 +38,10 @@ function deterministicData(
 export function createDeterministicDataFingerprint(
   data: GameData,
   config: FightingGameConfig,
+  stageIds: readonly string[] = [],
 ): string {
   const bytes = new TextEncoder().encode(
-    JSON.stringify(deterministicData(data, config)),
+    JSON.stringify(deterministicData(data, config, stageIds)),
   );
   let hash = 0xcbf29ce484222325n;
   const prime = 0x100000001b3n;
