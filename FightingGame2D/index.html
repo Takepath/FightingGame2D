@@ -62,7 +62,46 @@
         </section>
       </div>
     </section>
-
+    
+    <section
+      id="stage-select"
+      class="menu-layer is-hidden"
+      aria-label="ステージ選択画面"
+    >
+      <div class="stage-select-card">
+        <button id="stage-back" type="button" class="back-button">
+          ← カラー選択へ戻る
+        </button>
+        <p class="stage-select-kicker">STAGE SELECT</p>
+        <h1>ステージを選択してください</h1>
+        <p id="stage-status" class="stage-status"></p>
+        <div class="stage-carousel" aria-label="ステージ一覧">
+          <button
+            id="stage-previous"
+            type="button"
+            class="stage-carousel-button"
+            aria-label="前のステージ"
+          >
+            ←
+          </button>
+          <div id="stage-carousel-viewport" class="stage-carousel-viewport">
+            <div id="stage-carousel-track" class="stage-carousel-track"></div>
+          </div>
+          <button
+            id="stage-next"
+            type="button"
+            class="stage-carousel-button"
+            aria-label="次のステージ"
+          >
+            →
+          </button>
+        </div>
+        <button id="stage-confirm" type="button" class="stage-confirm">
+          このステージで開始
+        </button>
+      </div>
+    </section>
+    
     <section
       id="matchup-screen"
       class="menu-layer matchup-layer is-hidden"
