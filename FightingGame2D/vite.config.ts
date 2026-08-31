@@ -9,8 +9,17 @@ const CHARACTER_FRAME_MANIFEST_ID = "virtual:fighting-game-character-frames";
 const RESOLVED_CHARACTER_FRAME_MANIFEST_ID =
   "\0virtual:fighting-game-character-frames";
 
+/** ブラウザー用に背景PNGの一覧を提供する仮想モジュールID。 */
+const BACKGROUND_MANIFEST_ID = "virtual:fighting-game-backgrounds";
+
+/** Vite内部だけで使う、衝突しない背景マニフェストの仮想モジュールID。 */
+const RESOLVED_BACKGROUND_MANIFEST_ID = "\0virtual:fighting-game-backgrounds";
+
 /** PNG連番を入れる、public配下の固定ルート。 */
 const CHARACTER_FRAME_DIRECTORY = ["data", "characters"] as const;
+
+/** ステージ背景PNGを入れる、public配下の固定ルート。 */
+const BACKGROUND_DIRECTORY = ["background"] as const;
 
 /** PNGファイル名を自然順で比較し、000.png → 001.png → 010.png の順にする。 */
 function compareFrameFileNames(left: string, right: string): number {
@@ -73,6 +82,29 @@ function characterFrameManifest(
 }
 
 /**
+ * public/background 直下のPNGを自然順で走査する。
+ * 静的Web配信ではブラウザーがフォルダ一覧を読めないため、ここでビルド時・起動時に一覧化する。
+ */
+function backgroundManifest(projectRoot: string): string[] {
+  const publicDirectory = resolve(projectRoot, "public");
+  const backgroundDirectory = resolve(publicDirectory, ...BACKGROUND_DIRECTORY);
+  if (!existsSync(backgroundDirectory)) return [];
+
+  return readdirSync(backgroundDirectory, { withFileTypes: true })
+    .filter(
+      (entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".png"),
+    )
+    .map((entry) => entry.name)
+    .sort(compareFrameFileNames)
+    .map((fileName) =>
+      // URLはpublicからの相対パスかつ/区切りで保持する。
+      relative(publicDirectory, join(backgroundDirectory, fileName))
+        .split(sep)
+        .join("/"),
+    );
+}
+
+/**
  * 状態別PNG一覧をJSへ埋め込み、開発中にファイルを追加・削除した時は画面を再読込する。
  * 新しい素材を置くだけでマニフェスト編集を不要にするためのViteプラグイン。
  */
@@ -113,6 +145,58 @@ function characterFrameManifestPlugin(): Plugin {
         );
         if (module) server.moduleGraph.invalidateModule(module);
         // public配下の画像はHMR変換対象外なので、一覧とTextureを確実に同期するため全画面更新する。
+        server.ws.send({ type: "full-reload" });
+      };
+
+      server.watcher.on("add", refreshManifest);
+      server.watcher.on("addDir", refreshManifest);
+      server.watcher.on("unlink", refreshManifest);
+      server.watcher.on("unlinkDir", refreshManifest);
+    },
+  };
+}
+
+/**
+ * 背景PNG一覧をJSへ埋め込み、開発中にファイルを追加・削除した時は画面を再読込する。
+ * public/background がまだない新規プロジェクトでも、フォルダ作成後に検出できる。
+ */
+function backgroundManifestPlugin(): Plugin {
+  let projectRoot = process.cwd();
+
+  return {
+    name: "fighting-game-background-manifest",
+    configResolved(config) {
+      projectRoot = config.root;
+    },
+    resolveId(id) {
+      return id === BACKGROUND_MANIFEST_ID
+        ? RESOLVED_BACKGROUND_MANIFEST_ID
+        : undefined;
+    },
+    load(id) {
+      if (id !== RESOLVED_BACKGROUND_MANIFEST_ID) return undefined;
+      return `export default ${JSON.stringify(backgroundManifest(projectRoot))};`;
+    },
+    configureServer(server) {
+      const backgroundDirectory = resolve(
+        server.config.publicDir,
+        ...BACKGROUND_DIRECTORY,
+      );
+      // 親ディレクトリを監視し、まだbackgroundフォルダがない新規プロジェクトにも対応する。
+      server.watcher.add(server.config.publicDir);
+
+      const refreshManifest = (filePath: string): void => {
+        const resolvedPath = resolve(filePath);
+        const isBackgroundAsset =
+          resolvedPath === backgroundDirectory ||
+          resolvedPath.startsWith(`${backgroundDirectory}${sep}`);
+        if (!isBackgroundAsset) return;
+
+        const module = server.moduleGraph.getModuleById(
+          RESOLVED_BACKGROUND_MANIFEST_ID,
+        );
+        if (module) server.moduleGraph.invalidateModule(module);
+        // public配下の画像はHMR変換対象外なので、一覧とサムネイルを確実に同期するため全画面更新する。
         server.ws.send({ type: "full-reload" });
       };
 
@@ -166,7 +250,7 @@ export default defineConfig(({ mode }) => {
     .filter(Boolean);
 
   return {
-    plugins: [characterFrameManifestPlugin()],
+    plugins: [characterFrameManifestPlugin(), backgroundManifestPlugin()],
     define: {
       __ROOM_MIN_PASSPHRASE_LENGTH__: JSON.stringify(minPassphraseLength),
       __ROOM_MAX_PASSPHRASE_LENGTH__: JSON.stringify(maxPassphraseLength),
