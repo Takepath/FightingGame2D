@@ -2,3 +2,4 @@ id,render_type,asset,width,height,spawn_offset_y,target_opponent,self_move_easin
 hadoken_blue,circle,,44,44,0,false,linear,14,22,14,7,#4FD8FF,#4FD8FF,#E8F8FF
 fire_orb,circle,,60,60,0,false,linear,14,30,19,9,#FF3824,#FF8B2C,#FFF0A3
 takenoko,sprite,data/projectiles/take.png,150,100,0,false,linear,14,30,19,9,#DDFFDD,#DDFFDD,#DDFFDD
+sinku,circle,,200,200,0,false,linear,100,200,100,50,#CCCCFF,#BBBBFF,#6666DD
