@@ -558,7 +558,7 @@ function parseMoves(source: string): MoveDefinition[] {
       line,
       { integer: true, min: 0 },
     );
-    // x/yは移動方向の比率、speedは実際の速度として別々にCSVから読む。
+    // x/yは技開始位置からの総移動量（px）、speedは到達までのフレーム数として読む。
     const selfMoveX = dataNumber(row, "self_move_x", "moves.csv", line);
     const selfMoveY = dataNumber(row, "self_move_y", "moves.csv", line);
     const selfMoveSpeed = dataNumber(
@@ -566,7 +566,7 @@ function parseMoves(source: string): MoveDefinition[] {
       "self_move_speed",
       "moves.csv",
       line,
-      { min: 0 },
+      { integer: true, min: 0 },
     );
     const selfMoveEasing = toSelfMoveEasing(
       requiredText(row, "self_move_easing", "moves.csv", line),
@@ -585,7 +585,15 @@ function parseMoves(source: string): MoveDefinition[] {
         "moves.csv",
         line,
         "self_move_speed",
-        "self_move_x / self_move_y を使う場合は0より大きい値にしてください",
+        "self_move_x / self_move_y を使う場合は到達フレーム数を1以上にしてください",
+      );
+    }
+    if (selfMoveSpeed > active + recovery) {
+      dataError(
+        "moves.csv",
+        line,
+        "self_move_speed",
+        "startup終了後の active + recovery 以下にしてください",
       );
     }
     if (attackType === "projectile" && projectileLifetime <= 0) {

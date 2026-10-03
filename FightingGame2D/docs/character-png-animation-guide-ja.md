@@ -263,8 +263,8 @@ river_guard,river_shot,special,10,2,28,0,0,1100,10,0,0,15,false,0,0,0,0,0,0,line
 | `guard_bleak`                              | `true` ならガードを貫通、`false` なら上中下属性に従ってガード可能。                             |
 | `starter_proration`                        | 始動補正率。`20`なら120%、`-10`なら90%からコンボ減衰を開始します。                              |
 | `range_x` / `range_y`                      | 近接技の前方リーチ・上下判定。                                                                  |
-| `self_move_x` / `self_move_y`              | 自キャラ移動の横・縦方向の比率。正のXは前方、正のYは上方。                                      |
-| `self_move_speed`                          | 自キャラ移動の基準速度（px/秒）。`0`なら移動しません。                                          |
+| `self_move_x` / `self_move_y`              | 自キャラ移動の横・縦の総移動量（px）。正のXは前方、正のYは上方。                                |
+| `self_move_speed`                          | 自キャラが指定地点へ到達するまでのフレーム数。`0`なら移動しません。                             |
 | `self_move_easing`                         | `linear`（一定）・`accelerate`（加速）・`decelerate`（減速）・`arc`（山なり）の速度変化。       |
 | `knockback_x` / `knockback_y`              | 命中時の横・縦方向の吹き飛び。                                                                  |
 | `hitstun`                                  | 命中時の硬直フレーム。                                                                          |

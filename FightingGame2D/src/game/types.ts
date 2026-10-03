@@ -138,11 +138,11 @@ export interface MoveDefinition {
   rangeX: number;
   /** 攻撃中心から上下へ伸びる判定の余白（ピクセル）。 */
   rangeY: number;
-  /** 自キャラ移動の横方向。selfMoveYとの比率で進行方向を決める。 */
+  /** 自キャラ移動の横総移動量（px）。正値は前方、負値は後方。 */
   selfMoveX: number;
-  /** 自キャラ移動の縦方向。正値は上方向、selfMoveXとの比率で進行方向を決める。 */
+  /** 自キャラ移動の縦総移動量（px）。正値は上方、負値は下方。 */
   selfMoveY: number;
-  /** 自キャラ移動の基準速度（ピクセル/秒）。0なら自キャラ移動をしない。 */
+  /** selfMoveX/Yの目標地点へ到達するフレーム数。0なら自キャラ移動をしない。 */
   selfMoveSpeed: number;
   /** startup終了後の自キャラ移動へ適用する速度変化。 */
   selfMoveEasing: SelfMoveEasing;

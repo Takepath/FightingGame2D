@@ -8,3 +8,9 @@ declare module "virtual:fighting-game-character-frames" {
   const manifest: Readonly<Record<string, Readonly<Record<string, string[]>>>>;
   export default manifest;
 }
+
+/** Viteプラグインがpublic/background直下から生成する背景PNG一覧。 */
+declare module "virtual:fighting-game-backgrounds" {
+  const manifest: readonly string[];
+  export default manifest;
+}

@@ -75,6 +75,12 @@ const SUPER_GAUGE_BAR_MAX = 100;
 const SUPER_GAUGE_BAR_WIDTH =
   FIGHTING_GAME_CONFIG.presentation.superGaugeBarWidth;
 
+/** 選択キャラクターと無関係に使う、P1・P2固定の体力バー配色。 */
+const HEALTH_BAR_COLORS = FIGHTING_GAME_CONFIG.presentation.healthBarColors;
+
+/** HUDとトレーニング判定表示で共有する配色設定。 */
+const HUD_COLORS = FIGHTING_GAME_CONFIG.presentation.hudColors;
+
 const MATCH_RESULT_FIREWORKS =
   FIGHTING_GAME_CONFIG.presentation.fireworks.count;
 
@@ -125,6 +131,9 @@ export class MatchScreen extends Container {
 
   /** ステージ背景 */
   private readonly stageArt = new Graphics();
+
+  /** 暗転演出中に背景・飛び道具だけを覆う黒一色のレイヤー。 */
+  private readonly blackoutArt = new Graphics();
 
   /** public/backgroundのPNGを描画する、ステージ背景用スプライト。 */
   private readonly stageSprite = new Sprite();
@@ -306,6 +315,12 @@ export class MatchScreen extends Container {
   /** KO表示 */
   private readonly koText: Text;
 
+  /** PUNISH文字の背面に表示する、コミック調の青い爆発形状。 */
+  private readonly punishBurstArt = new Graphics();
+
+  /** 相手の技の後隙を取った時だけ中央に表示するPUNISH演出。 */
+  private readonly punishText: Text;
+
   /** 被撃側の連続ヒット数を表示するCOMBOテキスト。 */
   private readonly comboText: Text;
 
@@ -486,11 +501,26 @@ export class MatchScreen extends Container {
     this.info = this.createText("", 14, "#a9c7ed");
     this.roundText = this.createText("ROUND 1 / 3", 15, "#ffffff");
     this.koText = this.createText("", 64, "#fff1a3");
+    this.punishText = new Text({
+      text: "PUNISH!",
+      style: {
+        fontFamily: "Arial Black, Arial, sans-serif",
+        fontSize: 78,
+        fontWeight: "900",
+        fill: "#f4a0bd",
+        stroke: { color: "#000000", width: 9 },
+        letterSpacing: 2,
+      },
+      anchor: 0.5,
+    });
+    // コミックの効果音のように、文字を少し右上がりへ傾ける。
+    this.punishText.rotation = -0.15;
+    this.punishText.visible = false;
     this.comboText = this.createText("", 32, "#ffe58a");
     this.comboText.visible = false;
     this.superGaugeDigits = [
-      this.createText("0", 24, "#ff6b78"),
-      this.createText("0", 24, "#ff6b78"),
+      this.createText("0", 24, HUD_COLORS.superGauge.text),
+      this.createText("0", 24, HUD_COLORS.superGauge.text),
     ];
     this.trainingInputHistoryText = new Text({
       text: "",
@@ -521,7 +551,8 @@ export class MatchScreen extends Container {
     this.title.position.set(STAGE_WIDTH / 2, 55);
     this.info.position.set(STAGE_WIDTH / 2, 677);
     this.koText.position.set(STAGE_WIDTH / 2, 265);
-    // 画面下部の操作説明の左右に、赤系統で統一した超必殺ゲージの百の位を置く。
+    this.punishText.position.set(STAGE_WIDTH / 2, STAGE_HEIGHT / 2);
+    // 画面下部の操作説明の左右に、オレンジ寄りの黄色で統一した超必殺ゲージの百の位を置く。
     // P2はP1と鏡配置にし、数値をゲージの内側（画面中央側）へ寄せる。
     this.superGaugeDigits[0].position.set(36 + SUPER_GAUGE_BAR_WIDTH + 18, 649);
     this.superGaugeDigits[1].position.set(
@@ -541,6 +572,7 @@ export class MatchScreen extends Container {
       this.stageSprite,
       this.projectileArt,
       this.projectileSpriteLayer,
+      this.blackoutArt,
       this.fighterViews[0],
       this.fighterViews[1],
       this.trainingCollisionDebugArt,
@@ -553,6 +585,8 @@ export class MatchScreen extends Container {
       this.info,
       this.roundText,
       this.koText,
+      this.punishBurstArt,
+      this.punishText,
       this.comboText,
       this.superGaugeDigits[0],
       this.superGaugeDigits[1],
@@ -564,6 +598,8 @@ export class MatchScreen extends Container {
 
     // 初回描画
     this.drawStage();
+    this.drawBlackoutBackground();
+    this.drawPunishBurst();
     this.drawHud();
     this.refreshViews();
 
@@ -868,6 +904,8 @@ export class MatchScreen extends Container {
       this.keyConfigStatus.textContent = "入力の変更を取り消しました。";
       return;
     }
+    // 暗転中は全UIを非表示にする演出を優先し、一時停止モーダルを重ねない。
+    if (this.simulation.isBlackoutActive) return;
     // 試合終了後は結果モーダルの選択を確定するまで、Esc/Homeで通常の一時停止を重ねない。
     if (this.isMatchResultMenuOpen()) return;
     if (!this.isPauseMenuOpen()) {
@@ -1117,13 +1155,19 @@ export class MatchScreen extends Container {
     this.drawTrainingCollisionDebug();
   }
 
-  /** 被弾判定を赤、技の有効中の攻撃判定を青の半透明ボックスで描画する。 */
+  /** 被弾判定を操作可能なら赤、行動不可なら黄、技の有効中の攻撃判定を青で半透明表示する。 */
   private drawTrainingCollisionDebug(): void {
     const art = this.trainingCollisionDebugArt;
     if (!this.trainingCollisionDebugEnabled) return;
     art.clear();
 
     for (const collision of this.simulation.getCollisionDebugBoxes()) {
+      const hurtboxColor = collision.actionable
+        ? HUD_COLORS.trainingCollision.actionableHurtbox
+        : HUD_COLORS.trainingCollision.lockedHurtbox;
+      const hurtboxOutline = collision.actionable
+        ? HUD_COLORS.trainingCollision.actionableHurtboxOutline
+        : HUD_COLORS.trainingCollision.lockedHurtboxOutline;
       art
         .rect(
           collision.hurtbox.x,
@@ -1131,15 +1175,19 @@ export class MatchScreen extends Container {
           collision.hurtbox.width,
           collision.hurtbox.height,
         )
-        .fill({ color: 0xef4444, alpha: 0.2 })
-        .stroke({ color: 0xff7373, width: 2, alpha: 0.9 });
+        .fill({ color: hurtboxColor, alpha: 0.2 })
+        .stroke({ color: hurtboxOutline, width: 2, alpha: 0.9 });
 
       const attackbox = collision.attackbox;
       if (!attackbox) continue;
       art
         .rect(attackbox.x, attackbox.y, attackbox.width, attackbox.height)
-        .fill({ color: 0x38bdf8, alpha: 0.2 })
-        .stroke({ color: 0x7dd3fc, width: 2, alpha: 0.9 });
+        .fill({ color: HUD_COLORS.trainingCollision.attackbox, alpha: 0.2 })
+        .stroke({
+          color: HUD_COLORS.trainingCollision.attackboxOutline,
+          width: 2,
+          alpha: 0.9,
+        });
     }
   }
 
@@ -1528,6 +1576,59 @@ export class MatchScreen extends Container {
     }
   }
 
+  /** 暗転演出用に、ステージ全体を覆う黒背景を一度だけ作成する。 */
+  private drawBlackoutBackground(): void {
+    this.blackoutArt.clear();
+    this.blackoutArt
+      .rect(0, 0, STAGE_WIDTH, STAGE_HEIGHT)
+      .fill({ color: 0x000000 });
+    this.blackoutArt.visible = false;
+  }
+
+  /** 添付見本のような、不規則なトゲを持つ青いコミック調の爆発形状を描画する。 */
+  private drawPunishBurst(): void {
+    const centerX = STAGE_WIDTH / 2;
+    const centerY = STAGE_HEIGHT / 2;
+    const points: readonly (readonly [number, number])[] = [
+      [-330, -66],
+      [-172, -105],
+      [-292, -235],
+      [-70, -137],
+      [-26, -325],
+      [20, -143],
+      [108, -270],
+      [96, -117],
+      [308, -222],
+      [158, -70],
+      [354, -4],
+      [156, 38],
+      [320, 252],
+      [70, 116],
+      [29, 296],
+      [-18, 124],
+      [-158, 260],
+      [-132, 89],
+      [-342, 218],
+      [-174, 34],
+    ];
+    const firstPoint = points[0];
+    if (!firstPoint) return;
+
+    this.punishBurstArt.clear();
+    this.punishBurstArt.moveTo(
+      centerX + firstPoint[0],
+      centerY + firstPoint[1],
+    );
+    for (const [x, y] of points.slice(1)) {
+      this.punishBurstArt.lineTo(centerX + x, centerY + y);
+    }
+    this.punishBurstArt
+      .closePath()
+      .fill({ color: 0x17459e, alpha: 0.98 })
+      .stroke({ color: 0x02040a, width: 6, alpha: 1 });
+    this.punishBurstArt.visible = false;
+  }
+
   /**
    * HUD描画
    * 体力バー・ラウンド表示位置などを更新
@@ -1559,7 +1660,7 @@ export class MatchScreen extends Container {
       45,
       470,
       left.health / left.character.maxHealth,
-      left.character.primaryColor,
+      HEALTH_BAR_COLORS[0],
       left.character.colorVariant === "black",
       false,
     );
@@ -1568,7 +1669,7 @@ export class MatchScreen extends Container {
       45,
       470,
       right.health / right.character.maxHealth,
-      right.character.primaryColor,
+      HEALTH_BAR_COLORS[1],
       right.character.colorVariant === "black",
       true,
     );
@@ -1654,7 +1755,7 @@ export class MatchScreen extends Container {
   }
 
   /**
-   * 最大300の超必殺ゲージを、右肩上がりの100単位グラフとして描画する。
+   * 最大300の超必殺ゲージを、オレンジ寄りの黄色で右肩上がりの100単位グラフとして描画する。
    * P2側は図形・蓄積方向とも反転し、P1側と鏡配置にする。
    * 百の位はTextでバーの画面中央側へ表示し、バー自体は現在の100単位内の進捗を表す。
    */
@@ -1697,7 +1798,7 @@ export class MatchScreen extends Container {
       this.hudArt
         .moveTo(gridX, y + height - 2)
         .lineTo(gridX, topAt(gridX) + 2)
-        .stroke({ color: 0xff6573, width: 1, alpha: 0.28 });
+        .stroke({ color: HUD_COLORS.superGauge.border, width: 1, alpha: 0.28 });
     }
 
     if (fillWidth <= 0) return;
@@ -1709,7 +1810,7 @@ export class MatchScreen extends Container {
       .lineTo(fillEndX, topAt(fillEndX) + 2)
       .lineTo(fillStartX, topAt(fillStartX) + 2)
       .closePath()
-      .fill({ color: 0xe34452, alpha: 0.96 });
+      .fill({ color: HUD_COLORS.superGauge.fill, alpha: 0.96 });
   }
 
   /**
@@ -1762,6 +1863,8 @@ export class MatchScreen extends Container {
       centerText = `P${this.simulation.winner + 1} TAKES ROUND`;
     }
     this.setTextIfChanged(this.koText, centerText);
+    this.updateBlackoutPresentation();
+    this.updatePunishPresentation();
 
     this.setTextIfChanged(
       this.title,
@@ -1771,6 +1874,55 @@ export class MatchScreen extends Container {
             Math.ceil(this.simulation.roundTimeFrames / FRAMES_PER_SECOND),
           ),
     );
+  }
+
+  /** 暗転中だけUIと飛び道具を隠し、攻撃側のcinematic状態を画面に残す。 */
+  private updateBlackoutPresentation(): void {
+    const active = this.simulation.isBlackoutActive;
+    this.blackoutArt.visible = active;
+    this.projectileArt.visible = !active;
+    this.projectileSpriteLayer.visible = !active;
+    this.hudArt.visible = !active;
+    this.fighterViews[0].setNameplateVisible(!active);
+    this.fighterViews[1].setNameplateVisible(!active);
+
+    if (active) {
+      this.trainingCollisionDebugArt.visible = false;
+      this.trainingInputHistoryArt.visible = false;
+      this.title.visible = false;
+      this.info.visible = false;
+      this.roundText.visible = false;
+      this.koText.visible = false;
+      this.comboText.visible = false;
+      this.superGaugeDigits[0].visible = false;
+      this.superGaugeDigits[1].visible = false;
+      this.trainingInputHistoryFrameText.visible = false;
+      this.trainingInputHistoryText.visible = false;
+      return;
+    }
+
+    this.trainingCollisionDebugArt.visible =
+      this.training && this.trainingCollisionDebugEnabled;
+    this.trainingInputHistoryArt.visible =
+      this.training && this.trainingInputHistoryEnabled;
+    this.title.visible = true;
+    this.info.visible = true;
+    this.roundText.visible = !this.training;
+    this.koText.visible = true;
+    this.superGaugeDigits[0].visible = true;
+    this.superGaugeDigits[1].visible = true;
+    this.trainingInputHistoryFrameText.visible =
+      this.training && this.trainingInputHistoryEnabled;
+    this.trainingInputHistoryText.visible =
+      this.training && this.trainingInputHistoryEnabled;
+  }
+
+  /** PUNISH成立中だけ、青い爆発形状と太い黒縁付き文字を画面中央へ重ねる。 */
+  private updatePunishPresentation(): void {
+    const visible =
+      !this.simulation.isBlackoutActive && this.simulation.isPunishActive;
+    this.punishBurstArt.visible = visible;
+    this.punishText.visible = visible;
   }
 
   /** 2段目以降の連続ヒット数を、攻撃側HPバーの中央寄り下へ表示する。 */

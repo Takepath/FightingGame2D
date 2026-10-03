@@ -42,6 +42,8 @@ type SelectionHandler = (
   color: ColorVariant,
   dataFingerprint: string,
 ) => void;
+/** ステージ選択受信用コールバック型。 */
+type StageSelectionHandler = (stageId: string) => void;
 /** 試合終了後の画面遷移操作受信用コールバック型。 */
 type MatchResultActionHandler = (
   action: MatchResultAction,
@@ -87,6 +89,7 @@ const MAX_PENDING_INPUTS = 512;
 const GAME_ROOM_EVENT = {
   input: "fight-input",
   selection: "fight-selection",
+  stageSelection: "fight-stage-selection",
   matchResultAction: "fight-match-result-action",
   rematchStart: "fight-rematch-start",
 } as const;
@@ -132,6 +135,7 @@ export class RoomClient {
   /** MatchScreenが購読を作る前に到着した入力。世代・フレーム単位で重複をまとめる。 */
   private readonly pendingInputs = new Map<string, PendingInput>();
   private readonly selectionHandlers = new Set<SelectionHandler>();
+  private readonly stageSelectionHandlers = new Set<StageSelectionHandler>();
   private readonly matchResultActionHandlers =
     new Set<MatchResultActionHandler>();
   private readonly rematchStartHandlers = new Set<RematchStartHandler>();
@@ -146,6 +150,9 @@ export class RoomClient {
     );
     this.room.onEvent(GAME_ROOM_EVENT.selection, (payload) =>
       this.receiveSelection(payload),
+    );
+    this.room.onEvent(GAME_ROOM_EVENT.stageSelection, (payload) =>
+      this.receiveStageSelection(payload),
     );
     this.room.onEvent(GAME_ROOM_EVENT.matchResultAction, (payload) =>
       this.receiveMatchResultAction(payload),
@@ -186,6 +193,11 @@ export class RoomClient {
       color,
       dataFingerprint,
     });
+  }
+
+  /** ステージ選択で決定したIDを相手へ送る。 */
+  public sendStageSelection(stageId: string): void {
+    this.room.sendEvent(GAME_ROOM_EVENT.stageSelection, { stageId });
   }
 
   /** 試合終了モーダルで選んだ次の画面への操作を相手へ送る。 */
@@ -238,6 +250,12 @@ export class RoomClient {
   public onSelection(handler: SelectionHandler): () => void {
     this.selectionHandlers.add(handler);
     return () => this.selectionHandlers.delete(handler);
+  }
+
+  /** 相手のステージ選択受信処理を登録する。 */
+  public onStageSelection(handler: StageSelectionHandler): () => void {
+    this.stageSelectionHandlers.add(handler);
+    return () => this.stageSelectionHandlers.delete(handler);
   }
 
   /** 相手が試合終了モーダルで選んだ操作を登録し、解除関数を返す。 */
@@ -355,6 +373,20 @@ export class RoomClient {
     this.selectionHandlers.forEach((handler) =>
       handler(characterId, color as ColorVariant, dataFingerprint),
     );
+  }
+
+  /** 任意イベントからステージIDを取り出す。 */
+  private receiveStageSelection(payload: unknown): void {
+    if (!isRecord(payload)) return;
+    const stageId = payload.stageId;
+    if (
+      typeof stageId !== "string" ||
+      stageId.length === 0 ||
+      stageId.length > 128
+    ) {
+      return;
+    }
+    this.stageSelectionHandlers.forEach((handler) => handler(stageId));
   }
 
   /** 受信した試合終了後の操作が許可された値か検証して通知する。 */

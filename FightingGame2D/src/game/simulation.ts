@@ -544,14 +544,27 @@ export class MatchSimulation implements DeterministicSimulation {
     this.resetFighters();
   }
 
-  /** トレーニング用の敵体力自動回復をオン・オフする。 */
+  /** トレーニング用の敵体力自動回復をオン・オフし、オンへ切り替えた時点で敵を完全回復する。 */
   public setTrainingAutoRecovery(enabled: boolean): void {
-    if (this.training) this.trainingAutoRecovery = enabled;
+    if (!this.training) return;
+    const becameEnabled = enabled && !this.trainingAutoRecovery;
+    this.trainingAutoRecovery = enabled;
+    if (becameEnabled) {
+      const opponent = this.fighters[1];
+      opponent.health = opponent.character.maxHealth;
+    }
   }
 
-  /** トレーニング用の自キャラ必殺技ゲージ自動回復をオン・オフする。 */
+  /** トレーニング用の自キャラ必殺技ゲージ自動回復をオン・オフし、オンへ切り替えた時点で満タンにする。 */
   public setTrainingAutoSpecialGaugeRecovery(enabled: boolean): void {
-    if (this.training) this.trainingAutoSpecialGaugeRecovery = enabled;
+    if (!this.training) return;
+    const becameEnabled = enabled && !this.trainingAutoSpecialGaugeRecovery;
+    this.trainingAutoSpecialGaugeRecovery = enabled;
+    if (becameEnabled) {
+      const player = this.fighters[0];
+      player.specialGauge = MAX_SPECIAL_GAUGE;
+      player.specialGaugeRecoveryFrames = 0;
+    }
   }
 
   /**
@@ -819,9 +832,8 @@ export class MatchSimulation implements DeterministicSimulation {
       }
 
       fighter.actionFrame += 1;
-      // 自キャラ移動はstartup終了後の各フレームで速度を再設定する。
-      // 物理更新の直前に設定するため、linearは固定60FPSで一定の移動量になる。
-      this.applySelfMoveAnimation(fighter, activeMove);
+      // 自キャラ移動はstartup終了後の各フレームで目標地点までの差分を速度へ設定する。
+      const selfMoveFinished = this.applySelfMoveAnimation(fighter, activeMove);
       if (fighter.actionFrame >= this.moveLength(activeMove)) {
         // 保留ノックバックは被撃側のヒットスタン終了時に適用する。
         // ここで適用すると、後順の相手入力更新が速度を上書きするため行わない。
@@ -833,6 +845,11 @@ export class MatchSimulation implements DeterministicSimulation {
         fighter.comboCancelable = false;
       }
       this.applyPhysics(fighter);
+      // 最終到達フレームの物理更新後に速度を消し、目標地点を越える慣性を残さない。
+      if (selfMoveFinished) {
+        fighter.velocityX = 0;
+        fighter.velocityY = 0;
+      }
       fighter.previousButtons = input.buttons;
       return;
     }
@@ -1176,42 +1193,100 @@ export class MatchSimulation implements DeterministicSimulation {
   }
 
   /**
-   * startup終了時から技終了直前まで、CSV指定の速度曲線で自キャラを移動する。
-   * self_move_x/yは進行方向の比率、self_move_speedは速度そのものとして扱う。
+   * startup終了時から、CSVで指定した総移動量を指定フレーム数で配分して自キャラを移動する。
+   * self_move_x/yは総移動量（px）、self_move_speedは目標地点へ到達するフレーム数として扱う。
+   * 戻り値は、物理更新後に速度を止めるべき最終到達フレームかどうかを示す。
    */
   private applySelfMoveAnimation(
     fighter: FighterState,
     move: MoveDefinition,
-  ): void {
-    const movementFrames = move.active + move.recovery;
-    const movementFrame = fighter.actionFrame - move.startup;
-    if (
-      move.selfMoveSpeed === 0 ||
-      movementFrame < 0 ||
-      movementFrame >= movementFrames
-    ) {
-      return;
+  ): boolean {
+    const movementFrames = move.selfMoveSpeed;
+    // startup=0の開始フレームは物理更新を行わないため、次フレームを移動の1F目とする。
+    const movementFrame =
+      fighter.actionFrame - move.startup - (move.startup === 0 ? 1 : 0);
+    if (movementFrames === 0 || movementFrame < 0) return false;
+    if (movementFrame >= movementFrames) {
+      // 到達後の技硬直中に、直前フレームの横・縦速度を持ち越さない。
+      fighter.velocityX = 0;
+      fighter.velocityY = 0;
+      return false;
     }
 
-    const directionLength = Math.hypot(move.selfMoveX, move.selfMoveY);
-    // CSV読込時にも検証するが、外部から定義を渡した場合にも不正な除算を防ぐ。
-    if (directionLength === 0) return;
-
-    const speedPercent = this.selfMoveSpeedPercent(
+    const [previousNumerator, denominator] = this.selfMoveProgress(
       move.selfMoveEasing,
       movementFrame,
       movementFrames,
     );
-    const speedPerFrame =
-      (move.selfMoveSpeed * POSITION_SCALE * speedPercent) /
-      (FRAMES_PER_SECOND * 100);
-    fighter.velocityX =
-      fighter.facing *
-      Math.round((speedPerFrame * move.selfMoveX) / directionLength);
-    // CSVの正のY値を上昇として扱い、ゲーム座標系の負Y速度へ変換する。
-    fighter.velocityY = -Math.round(
-      (speedPerFrame * move.selfMoveY) / directionLength,
+    const [currentNumerator] = this.selfMoveProgress(
+      move.selfMoveEasing,
+      movementFrame + 1,
+      movementFrames,
     );
+    // 累積座標の差を固定小数点で求めるため、曲線を使っても最終地点に誤差なく到達する。
+    const previousX = this.selfMovePositionFixed(
+      move.selfMoveX,
+      previousNumerator,
+      denominator,
+    );
+    const currentX = this.selfMovePositionFixed(
+      move.selfMoveX,
+      currentNumerator,
+      denominator,
+    );
+    const previousY = this.selfMovePositionFixed(
+      move.selfMoveY,
+      previousNumerator,
+      denominator,
+    );
+    const currentY = this.selfMovePositionFixed(
+      move.selfMoveY,
+      currentNumerator,
+      denominator,
+    );
+    fighter.velocityX = fighter.facing * (currentX - previousX);
+    // CSVの正のY値を上昇として扱い、ゲーム座標系の負Y速度へ変換する。
+    fighter.velocityY = -(currentY - previousY);
+    return movementFrame + 1 === movementFrames;
+  }
+
+  /** 指定した進捗率における移動先を固定小数点座標へ変換する。 */
+  private selfMovePositionFixed(
+    totalPixels: number,
+    numerator: number,
+    denominator: number,
+  ): number {
+    return Math.trunc((totalPixels * POSITION_SCALE * numerator) / denominator);
+  }
+
+  /** 速度曲線に対応した0〜1の累積移動進捗を、整数の分子・分母で返す。 */
+  private selfMoveProgress(
+    easing: MoveDefinition["selfMoveEasing"],
+    completedFrames: number,
+    movementFrames: number,
+  ): readonly [number, number] {
+    if (easing === "accelerate") {
+      return [
+        completedFrames * completedFrames,
+        movementFrames * movementFrames,
+      ];
+    }
+    if (easing === "decelerate") {
+      const remainingFrames = movementFrames - completedFrames;
+      return [
+        movementFrames * movementFrames - remainingFrames * remainingFrames,
+        movementFrames * movementFrames,
+      ];
+    }
+    if (easing === "arc") {
+      // smoothstepの累積曲線で、開始・終了時を遅く中央を速くする。
+      return [
+        3 * completedFrames * completedFrames * movementFrames -
+          2 * completedFrames * completedFrames * completedFrames,
+        movementFrames * movementFrames * movementFrames,
+      ];
+    }
+    return [completedFrames, movementFrames];
   }
 
   /** 自キャラ移動の現在フレームに対応する速度倍率（百分率）を決定論的に返す。 */
